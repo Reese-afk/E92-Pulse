@@ -1,0 +1,139 @@
+"""
+UDS Service Definitions
+
+Provides enumerations and definitions for UDS services
+used in BMW diagnostics.
+"""
+
+from enum import IntEnum
+
+
+class UDSServices(IntEnum):
+    """Standard UDS Service IDs."""
+
+    # Diagnostic Session Control
+    DIAGNOSTIC_SESSION_CONTROL = 0x10
+    ECU_RESET = 0x11
+    SECURITY_ACCESS = 0x27
+    COMMUNICATION_CONTROL = 0x28
+    TESTER_PRESENT = 0x3E
+    ACCESS_TIMING_PARAMETER = 0x83
+    SECURED_DATA_TRANSMISSION = 0x84
+    CONTROL_DTC_SETTING = 0x85
+    RESPONSE_ON_EVENT = 0x86
+    LINK_CONTROL = 0x87
+
+    # Data Transmission
+    READ_DATA_BY_IDENTIFIER = 0x22
+    READ_MEMORY_BY_ADDRESS = 0x23
+    READ_SCALING_DATA_BY_IDENTIFIER = 0x24
+    READ_DATA_BY_PERIODIC_IDENTIFIER = 0x2A
+    DYNAMICALLY_DEFINE_DATA_IDENTIFIER = 0x2C
+    WRITE_DATA_BY_IDENTIFIER = 0x2E
+    WRITE_MEMORY_BY_ADDRESS = 0x3D
+
+    # Stored Data Transmission
+    CLEAR_DIAGNOSTIC_INFORMATION = 0x14
+    READ_DTC_INFORMATION = 0x19
+
+    # Input Output Control
+    INPUT_OUTPUT_CONTROL_BY_IDENTIFIER = 0x2F
+
+    # Routine Control
+    ROUTINE_CONTROL = 0x31
+
+    # Upload Download
+    REQUEST_DOWNLOAD = 0x34
+    REQUEST_UPLOAD = 0x35
+    TRANSFER_DATA = 0x36
+    REQUEST_TRANSFER_EXIT = 0x37
+
+
+class DiagnosticSession(IntEnum):
+    """UDS Diagnostic Session Types."""
+
+    DEFAULT = 0x01
+    PROGRAMMING = 0x02
+    EXTENDED = 0x03
+
+
+class ResetType(IntEnum):
+    """UDS ECU Reset Types."""
+
+    HARD_RESET = 0x01
+    KEY_OFF_ON_RESET = 0x02
+    SOFT_RESET = 0x03
+
+
+class RoutineControlType(IntEnum):
+    """UDS Routine Control Sub-functions."""
+
+    START_ROUTINE = 0x01
+    STOP_ROUTINE = 0x02
+    REQUEST_ROUTINE_RESULTS = 0x03
+
+
+class DTCSubFunction(IntEnum):
+    """Read DTC Information Sub-functions."""
+
+    REPORT_NUMBER_OF_DTC_BY_STATUS_MASK = 0x01
+    REPORT_DTC_BY_STATUS_MASK = 0x02
+    REPORT_DTC_SNAPSHOT_IDENTIFICATION = 0x03
+    REPORT_DTC_SNAPSHOT_RECORD_BY_DTC_NUMBER = 0x04
+    REPORT_DTC_SNAPSHOT_RECORD_BY_RECORD_NUMBER = 0x05
+    REPORT_DTC_EXTENDED_DATA_RECORD_BY_DTC_NUMBER = 0x06
+    REPORT_NUMBER_OF_DTC_BY_SEVERITY_MASK_RECORD = 0x07
+    REPORT_DTC_BY_SEVERITY_MASK_RECORD = 0x08
+    REPORT_SEVERITY_INFO_OF_DTC = 0x09
+    REPORT_SUPPORTED_DTC = 0x0A
+    REPORT_FIRST_TEST_FAILED_DTC = 0x0B
+    REPORT_FIRST_CONFIRMED_DTC = 0x0C
+    REPORT_MOST_RECENT_TEST_FAILED_DTC = 0x0D
+    REPORT_MOST_RECENT_CONFIRMED_DTC = 0x0E
+    REPORT_DTC_FAULT_DETECTION_COUNTER = 0x14
+    REPORT_DTC_WITH_PERMANENT_STATUS = 0x15
+
+
+class DTCStatusMask(IntEnum):
+    """DTC Status Mask Bits."""
+
+    TEST_FAILED = 0x01
+    TEST_FAILED_THIS_OPERATION_CYCLE = 0x02
+    PENDING_DTC = 0x04
+    CONFIRMED_DTC = 0x08
+    TEST_NOT_COMPLETED_SINCE_LAST_CLEAR = 0x10
+    TEST_FAILED_SINCE_LAST_CLEAR = 0x20
+    TEST_NOT_COMPLETED_THIS_OPERATION_CYCLE = 0x40
+    WARNING_INDICATOR_REQUESTED = 0x80
+
+
+# Common BMW Data Identifiers (DIDs)
+class BMWDataIdentifiers(IntEnum):
+    """Common BMW Data Identifiers."""
+
+    # Standard OBD DIDs
+    VIN = 0xF190
+    ECU_HARDWARE_NUMBER = 0xF191
+    ECU_SOFTWARE_NUMBER = 0xF194
+    ECU_SERIAL_NUMBER = 0xF18C
+
+    # BMW-specific (non-proprietary, general purpose)
+    SYSTEM_SUPPLIER_ID = 0xF18A
+    ECU_MANUFACTURING_DATE = 0xF18B
+    PROGRAMMING_DATE = 0xF199
+
+    # Vehicle data (read-only, safe)
+    BATTERY_VOLTAGE = 0x1001
+    ENGINE_RPM = 0x100C
+    VEHICLE_SPEED = 0x100D
+    COOLANT_TEMP = 0x1005
+    INTAKE_AIR_TEMP = 0x100F
+
+
+# Battery registration routine IDs (safe, user-serviceable)
+class BatteryRoutines(IntEnum):
+    """Battery service routine IDs."""
+
+    REGISTER_BATTERY = 0x0300
+    READ_BATTERY_STATUS = 0x0301
+    RESET_BATTERY_ADAPTATION = 0x0302
