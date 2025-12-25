@@ -8,7 +8,7 @@ ISTA-style guided workflow interface.
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -32,8 +32,6 @@ from e92_pulse.bmw.module_registry import ModuleRegistry
 from e92_pulse.protocols.uds_client import UDSClient
 from e92_pulse.bmw.module_scan import ModuleScanner
 from e92_pulse.bmw.services import ServiceManager
-from e92_pulse.transport.mock_transport import MockTransport
-from e92_pulse.sim.mock_ecus import MockECUManager
 
 logger = get_logger(__name__)
 
@@ -76,11 +74,18 @@ class StatusIndicator(QFrame):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setFixedHeight(60)
+        self.setFixedHeight(80)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 5, 10, 5)
+        layout.setSpacing(2)
 
+        # Adapter status
+        self._adapter_label = QLabel("No CAN adapter")
+        self._adapter_label.setFont(QFont("Sans", 9))
+        self._adapter_label.setStyleSheet("color: #888888;")
+
+        # Connection status
         self._status_label = QLabel("Disconnected")
         self._status_label.setFont(QFont("Sans", 10, QFont.Weight.Bold))
 
@@ -88,16 +93,29 @@ class StatusIndicator(QFrame):
         self._detail_label.setFont(QFont("Sans", 9))
         self._detail_label.setStyleSheet("color: #888888;")
 
+        layout.addWidget(self._adapter_label)
         layout.addWidget(self._status_label)
         layout.addWidget(self._detail_label)
 
         self.set_disconnected()
 
-    def set_connected(self, port: str) -> None:
+    def set_adapter_detected(self, count: int, names: list[str]) -> None:
+        """Set adapter detection status."""
+        if count == 0:
+            self._adapter_label.setText("No CAN adapter")
+            self._adapter_label.setStyleSheet("color: #cc6600;")
+        else:
+            iface_list = ", ".join(names[:2])
+            if count > 2:
+                iface_list += f" (+{count - 2})"
+            self._adapter_label.setText(f"CAN: {iface_list}")
+            self._adapter_label.setStyleSheet("color: #00cc00;")
+
+    def set_connected(self, interface: str) -> None:
         """Set connected state."""
         self._status_label.setText("Connected")
         self._status_label.setStyleSheet("color: #00cc00;")
-        self._detail_label.setText(port)
+        self._detail_label.setText(interface)
 
     def set_disconnected(self) -> None:
         """Set disconnected state."""
@@ -111,11 +129,65 @@ class StatusIndicator(QFrame):
         self._status_label.setStyleSheet("color: #cccc00;")
         self._detail_label.setText("")
 
-    def set_simulation(self) -> None:
-        """Set simulation mode."""
-        self._status_label.setText("Simulation")
-        self._status_label.setStyleSheet("color: #cc00cc;")
-        self._detail_label.setText("Mock ECUs active")
+
+class VehicleInfoPanel(QFrame):
+    """Panel showing connected vehicle information."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #1a3a1a;
+                border: 1px solid #2a5a2a;
+                border-radius: 5px;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+
+        title = QLabel("Vehicle")
+        title.setFont(QFont("Sans", 9, QFont.Weight.Bold))
+        title.setStyleSheet("color: #00cc00;")
+        layout.addWidget(title)
+
+        self._vin_label = QLabel("VIN: ---")
+        self._vin_label.setFont(QFont("Monospace", 8))
+        self._vin_label.setStyleSheet("color: #cccccc;")
+        layout.addWidget(self._vin_label)
+
+        self._series_label = QLabel("Series: ---")
+        self._series_label.setFont(QFont("Sans", 8))
+        self._series_label.setStyleSheet("color: #aaaaaa;")
+        layout.addWidget(self._series_label)
+
+        self._engine_label = QLabel("Engine: ---")
+        self._engine_label.setFont(QFont("Sans", 8))
+        self._engine_label.setStyleSheet("color: #aaaaaa;")
+        layout.addWidget(self._engine_label)
+
+        self.hide()  # Hidden until connected
+
+    def update_info(self, vin: str | None, series: str, engine: str) -> None:
+        """Update vehicle information."""
+        if vin:
+            # Show partial VIN for privacy
+            display_vin = vin[:7] + "..." + vin[-4:] if len(vin) >= 11 else vin
+            self._vin_label.setText(f"VIN: {display_vin}")
+        else:
+            self._vin_label.setText("VIN: Reading...")
+
+        self._series_label.setText(f"Series: {series}")
+        self._engine_label.setText(f"Engine: {engine}")
+        self.show()
+
+    def clear_info(self) -> None:
+        """Clear vehicle information."""
+        self._vin_label.setText("VIN: ---")
+        self._series_label.setText("Series: ---")
+        self._engine_label.setText("Engine: ---")
+        self.hide()
 
 
 class MainWindow(QMainWindow):
@@ -145,6 +217,9 @@ class MainWindow(QMainWindow):
         geom = config.ui.window_geometry
         self.setGeometry(geom["x"], geom["y"], geom["width"], geom["height"])
 
+        # Scan for CAN adapters on startup
+        QTimer.singleShot(100, self._refresh_adapter_status)
+
         logger.info("Main window initialized")
 
     def _setup_core_components(self) -> None:
@@ -158,30 +233,6 @@ class MainWindow(QMainWindow):
         self._uds_client: UDSClient | None = None
         self._module_scanner: ModuleScanner | None = None
         self._service_manager: ServiceManager | None = None
-        self._mock_ecu_manager: MockECUManager | None = None
-
-        # If simulation mode, set up mock components
-        if self._config.simulation_mode:
-            self._setup_simulation_mode()
-
-    def _setup_simulation_mode(self) -> None:
-        """Set up components for simulation mode."""
-        self._mock_ecu_manager = MockECUManager()
-        mock_transport = MockTransport()
-        mock_transport.connect_mock_ecu(self._mock_ecu_manager)
-        self._connection_manager.set_transport(mock_transport)
-
-        self._uds_client = UDSClient(
-            mock_transport, self._safety_manager, target_address=0x00
-        )
-        self._module_scanner = ModuleScanner(
-            self._uds_client, self._module_registry, self._vehicle_profile
-        )
-        self._service_manager = ServiceManager(
-            self._uds_client, self._safety_manager, self._vehicle_profile
-        )
-
-        logger.info("Simulation mode enabled")
 
     def _setup_ui(self) -> None:
         """Set up the user interface."""
@@ -385,33 +436,13 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
+        # Vehicle info panel (hidden until connected)
+        self._vehicle_info_panel = VehicleInfoPanel()
+        layout.addWidget(self._vehicle_info_panel)
+
         # Status indicator
         self._status_indicator = StatusIndicator()
         layout.addWidget(self._status_indicator)
-
-        if self._config.simulation_mode:
-            self._status_indicator.set_simulation()
-
-        # Simulation toggle
-        sim_btn = QPushButton("Simulation Mode")
-        sim_btn.setCheckable(True)
-        sim_btn.setChecked(self._config.simulation_mode)
-        sim_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                border: 1px solid #666666;
-                color: #888888;
-                padding: 5px;
-                font-size: 10px;
-            }
-            QPushButton:checked {
-                border-color: #cc00cc;
-                color: #cc00cc;
-            }
-        """)
-        sim_btn.clicked.connect(self._toggle_simulation)
-        layout.addWidget(sim_btn)
-        self._sim_button = sim_btn
 
         return sidebar
 
@@ -515,16 +546,6 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        # View menu
-        view_menu = menubar.addMenu("&View")
-
-        sim_action = QAction("&Simulation Mode", self)
-        sim_action.setCheckable(True)
-        sim_action.setChecked(self._config.simulation_mode)
-        sim_action.triggered.connect(self._toggle_simulation)
-        view_menu.addAction(sim_action)
-        self._sim_action = sim_action
-
         # Help menu
         help_menu = menubar.addMenu("&Help")
 
@@ -569,16 +590,15 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Handle connection state changes."""
         if new_state == ConnectionState.CONNECTED:
-            port = self._connection_manager.current_port
-            if port:
-                self._status_indicator.set_connected(port.device)
+            iface = self._connection_manager.current_interface
+            if iface:
+                self._status_indicator.set_connected(iface.name)
             self._enable_pages(True)
         elif new_state == ConnectionState.CONNECTING:
             self._status_indicator.set_connecting()
         elif new_state == ConnectionState.DISCONNECTED:
-            if not self._config.simulation_mode:
-                self._status_indicator.set_disconnected()
-            self._enable_pages(self._config.simulation_mode)
+            self._status_indicator.set_disconnected()
+            self._enable_pages(False)
         elif new_state == ConnectionState.ERROR:
             self._status_indicator.set_disconnected()
 
@@ -604,40 +624,60 @@ class MainWindow(QMainWindow):
             self._pages["fault_memory"].set_uds_client(self._uds_client)
             self._pages["services"].set_service_manager(self._service_manager)
 
+            # Try to read VIN from vehicle
+            self._read_vehicle_info()
+
+        # Show vehicle info panel with current profile data
+        self._vehicle_info_panel.update_info(
+            self._vehicle_profile.vin,
+            self._vehicle_profile.series.value,
+            self._vehicle_profile.engine.value,
+        )
+
         self.connection_changed.emit(True)
         self._statusbar.showMessage("Connected to vehicle", 3000)
 
     def _on_disconnected(self) -> None:
         """Handle disconnection."""
-        if not self._config.simulation_mode:
-            self._enable_pages(False)
+        self._enable_pages(False)
+        self._vehicle_info_panel.clear_info()
         self.connection_changed.emit(False)
         self._statusbar.showMessage("Disconnected", 3000)
+
+    def _read_vehicle_info(self) -> None:
+        """Read VIN and vehicle info from the connected vehicle."""
+        if not self._uds_client:
+            return
+
+        try:
+            # Read VIN from DME (engine ECU) using Read Data By Identifier
+            # VIN is typically at DID 0xF190 (standard UDS)
+            vin = self._uds_client.read_vin()
+            if vin:
+                self._vehicle_profile.vin = vin
+                logger.info(f"Read VIN from vehicle: {vin[:7]}...{vin[-4:]}")
+
+                # Update the vehicle info panel with the new VIN
+                self._vehicle_info_panel.update_info(
+                    self._vehicle_profile.vin,
+                    self._vehicle_profile.series.value,
+                    self._vehicle_profile.engine.value,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to read VIN: {e}")
+            # Keep showing profile data even if VIN read fails
+
+    def _refresh_adapter_status(self) -> None:
+        """Refresh CAN adapter detection status."""
+        interfaces = self._connection_manager.discover_interfaces()
+        names = [iface.name for iface in interfaces]
+        self._status_indicator.set_adapter_detected(len(interfaces), names)
 
     def _enable_pages(self, enabled: bool) -> None:
         """Enable/disable navigation to pages."""
         for key, btn in self._nav_buttons.items():
             if key != "connect":
                 btn.setEnabled(enabled)
-
-    def _toggle_simulation(self, checked: bool) -> None:
-        """Toggle simulation mode."""
-        self._config.simulation_mode = checked
-        self._sim_button.setChecked(checked)
-        self._sim_action.setChecked(checked)
-
-        if checked:
-            self._setup_simulation_mode()
-            self._status_indicator.set_simulation()
-            self._enable_pages(True)
-            self._on_connected()
-        else:
-            self._mock_ecu_manager = None
-            if not self._connection_manager.is_connected:
-                self._status_indicator.set_disconnected()
-                self._enable_pages(False)
-
-        save_config(self._config)
 
     def _show_about(self) -> None:
         """Show about dialog."""
@@ -647,7 +687,7 @@ class MainWindow(QMainWindow):
             "<h2>E92 Pulse</h2>"
             "<p>Version 0.1.0</p>"
             "<p>BMW E92 M3 Diagnostic Tool</p>"
-            "<p>A production-grade diagnostic GUI tool using K+DCAN USB cable.</p>"
+            "<p>A production-grade diagnostic GUI tool using SocketCAN.</p>"
             "<hr>"
             "<p><b>What this tool does NOT do:</b></p>"
             "<ul>"

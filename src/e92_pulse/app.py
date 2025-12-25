@@ -6,13 +6,12 @@ Initializes logging, loads configuration, and starts the PyQt6 GUI.
 """
 
 import sys
-import os
 import argparse
 from pathlib import Path
 from typing import NoReturn
 
 from e92_pulse.core.app_logging import setup_logging, get_logger
-from e92_pulse.core.config import AppConfig, load_config
+from e92_pulse.core.config import load_config
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -21,12 +20,6 @@ def parse_arguments() -> argparse.Namespace:
         prog="e92-pulse",
         description="E92 Pulse - BMW E92 M3 Diagnostic Tool",
         epilog="For more information, see the documentation.",
-    )
-    parser.add_argument(
-        "--simulation",
-        "-s",
-        action="store_true",
-        help="Run in simulation mode (no hardware required)",
     )
     parser.add_argument(
         "--debug",
@@ -67,19 +60,14 @@ def main() -> NoReturn:
     logger = get_logger(__name__)
 
     logger.info("E92 Pulse starting...")
-    logger.info(f"Simulation mode: {args.simulation}")
     logger.info(f"Debug mode: {args.debug}")
 
     # Load configuration
     config = load_config(args.config)
-    if args.simulation:
-        config.simulation_mode = True
 
     # Import PyQt6 after argument parsing to avoid slow startup for --help
     try:
         from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import Qt
-        from PyQt6.QtGui import QIcon
     except ImportError as e:
         logger.error(f"Failed to import PyQt6: {e}")
         print("Error: PyQt6 is required. Install with: pip install PyQt6")

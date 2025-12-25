@@ -26,17 +26,17 @@ class BaseTransport(ABC):
     Abstract base class for transport implementations.
 
     All transports must implement these methods for consistent
-    behavior across serial, CAN, and mock implementations.
+    behavior across CAN and mock implementations.
     """
 
     @abstractmethod
-    def open(self, port: str, baud_rate: int = 115200) -> bool:
+    def open(self, interface: str, bitrate: int = 500000) -> bool:
         """
         Open the transport connection.
 
         Args:
-            port: Port/interface identifier
-            baud_rate: Baud rate (for serial transports)
+            interface: Interface identifier (can0, vcan0, simulation)
+            bitrate: CAN bitrate (default 500000 for BMW)
 
         Returns:
             True if opened successfully

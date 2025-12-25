@@ -2,7 +2,7 @@
 Connect Page
 
 Provides interface for connecting to the diagnostic interface.
-Handles port discovery, selection, and connection management.
+Handles CAN interface discovery, selection, and connection management.
 """
 
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
@@ -20,8 +20,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import QFont
 
-from e92_pulse.core.connection import ConnectionManager, ConnectionState
-from e92_pulse.core.discovery import PortInfo
+from e92_pulse.core.connection import ConnectionManager, ConnectionState, InterfaceInfo
 from e92_pulse.core.config import AppConfig
 from e92_pulse.core.app_logging import get_logger
 
@@ -33,7 +32,7 @@ class ConnectPage(QWidget):
     Connection management page.
 
     Provides:
-    - Port discovery and selection
+    - CAN interface discovery and selection
     - Connect/disconnect controls
     - Connection status display
     - Hardware requirements information
@@ -52,13 +51,13 @@ class ConnectPage(QWidget):
 
         self._connection_manager = connection_manager
         self._config = config
-        self._ports: list[PortInfo] = []
+        self._interfaces: list[InterfaceInfo] = []
 
         self._setup_ui()
         self._connect_signals()
 
-        # Initial port scan
-        QTimer.singleShot(100, self._scan_ports)
+        # Initial interface scan
+        QTimer.singleShot(100, self._scan_interfaces)
 
     def _setup_ui(self) -> None:
         """Set up the user interface."""
@@ -72,7 +71,7 @@ class ConnectPage(QWidget):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Connect your K+DCAN USB cable to begin diagnostics"
+            "Select a SocketCAN interface to begin diagnostics"
         )
         subtitle.setFont(QFont("Sans", 12))
         subtitle.setStyleSheet("color: #888888;")
@@ -95,30 +94,30 @@ class ConnectPage(QWidget):
         """)
         left_layout = QVBoxLayout(left_frame)
 
-        # Port selection
-        port_group = QGroupBox("Diagnostic Port")
-        port_layout = QVBoxLayout(port_group)
+        # Interface selection
+        iface_group = QGroupBox("CAN Interface")
+        iface_layout = QVBoxLayout(iface_group)
 
-        port_row = QHBoxLayout()
-        self._port_combo = QComboBox()
-        self._port_combo.setMinimumWidth(300)
-        self._port_combo.setPlaceholderText("Select port...")
-        port_row.addWidget(self._port_combo, 1)
+        iface_row = QHBoxLayout()
+        self._interface_combo = QComboBox()
+        self._interface_combo.setMinimumWidth(300)
+        self._interface_combo.setPlaceholderText("Select interface...")
+        iface_row.addWidget(self._interface_combo, 1)
 
         self._rescan_btn = QPushButton("Rescan")
         self._rescan_btn.setFixedWidth(80)
-        self._rescan_btn.clicked.connect(self._scan_ports)
-        port_row.addWidget(self._rescan_btn)
+        self._rescan_btn.clicked.connect(self._scan_interfaces)
+        iface_row.addWidget(self._rescan_btn)
 
-        port_layout.addLayout(port_row)
+        iface_layout.addLayout(iface_row)
 
-        # Port details
-        self._port_details = QLabel("No port selected")
-        self._port_details.setStyleSheet("color: #888888; font-size: 11px;")
-        self._port_details.setWordWrap(True)
-        port_layout.addWidget(self._port_details)
+        # Interface details
+        self._iface_details = QLabel("No interface selected")
+        self._iface_details.setStyleSheet("color: #888888; font-size: 11px;")
+        self._iface_details.setWordWrap(True)
+        iface_layout.addWidget(self._iface_details)
 
-        left_layout.addWidget(port_group)
+        left_layout.addWidget(iface_group)
 
         # Connection status
         status_group = QGroupBox("Connection Status")
@@ -143,6 +142,7 @@ class ConnectPage(QWidget):
         self._connect_btn.setMinimumHeight(50)
         self._connect_btn.setFont(QFont("Sans", 12, QFont.Weight.Bold))
         self._connect_btn.clicked.connect(self._on_connect_clicked)
+        self._connect_btn.setEnabled(False)  # Disabled until interface found
         btn_layout.addWidget(self._connect_btn)
 
         self._disconnect_btn = QPushButton("Disconnect")
@@ -181,9 +181,10 @@ class ConnectPage(QWidget):
         req_layout = QVBoxLayout(req_group)
 
         requirements = [
-            "K+DCAN USB cable (FTDI recommended)",
+            "SocketCAN-compatible CAN adapter",
+            "  (PEAK PCAN-USB, Kvaser, CANable, etc.)",
             "Vehicle ignition ON (engine OFF)",
-            "Linux with dialout group membership",
+            "CAN interface configured at 500kbps",
             "Stable 12V battery",
         ]
 
@@ -211,15 +212,14 @@ class ConnectPage(QWidget):
         """)
         self._trouble_text.setHtml("""
             <p style="color: #888888;">
-            <b>No ports detected?</b><br>
-            - Check USB cable connection<br>
-            - Verify user is in 'dialout' group:<br>
-            <code style="color: #00cccc;">sudo usermod -aG dialout $USER</code><br>
-            - Log out and back in after group change<br><br>
+            <b>No CAN interfaces detected?</b><br>
+            - Connect your SocketCAN adapter<br>
+            - Set up interface with:<br>
+            <code style="color: #00cccc;">sudo ip link set can0 up type can bitrate 500000</code><br><br>
             <b>Connection fails?</b><br>
             - Ensure ignition is ON<br>
-            - Try different USB port<br>
-            - Check for other diagnostic software
+            - Verify CAN adapter is recognized (dmesg)<br>
+            - Check can-utils: <code style="color: #00cccc;">candump can0</code>
             </p>
         """)
         trouble_layout.addWidget(self._trouble_text)
@@ -258,71 +258,77 @@ class ConnectPage(QWidget):
 
     def _connect_signals(self) -> None:
         """Connect widget signals."""
-        self._port_combo.currentIndexChanged.connect(self._on_port_selected)
+        self._interface_combo.currentIndexChanged.connect(self._on_interface_selected)
         self._connection_manager.add_state_callback(self._on_state_change)
 
-    def _scan_ports(self) -> None:
-        """Scan for available ports."""
-        self._port_combo.clear()
-        self._ports = self._connection_manager.discover_ports(force_rescan=True)
+    def _scan_interfaces(self) -> None:
+        """Scan for available CAN interfaces."""
+        self._interface_combo.clear()
+        self._interfaces = self._connection_manager.discover_interfaces()
 
-        if not self._ports:
-            self._port_combo.addItem("No ports detected")
-            self._port_combo.setEnabled(False)
+        if not self._interfaces:
+            self._interface_combo.addItem("No CAN interfaces detected")
+            self._interface_combo.setEnabled(False)
             self._connect_btn.setEnabled(False)
-            self._port_details.setText(
-                "No USB serial ports found. Check cable connection."
+            self._iface_details.setText(
+                "No SocketCAN interfaces found.\n"
+                "Connect a CAN adapter and configure it."
             )
         else:
-            self._port_combo.setEnabled(True)
+            self._interface_combo.setEnabled(True)
             self._connect_btn.setEnabled(True)
 
-            for port in self._ports:
-                display = f"{port.device} - {port.name}"
-                if port.score > 50:
-                    display += " (Recommended)"
-                self._port_combo.addItem(display)
+            for iface in self._interfaces:
+                if iface.interface_type == "virtual":
+                    display = f"{iface.name} - Virtual CAN (Testing)"
+                else:
+                    display = f"{iface.name} - CAN Interface @ 500kbps"
+                self._interface_combo.addItem(display)
 
-            # Select first (best) port
-            self._port_combo.setCurrentIndex(0)
-            self._on_port_selected(0)
+            # Select first interface
+            self._interface_combo.setCurrentIndex(0)
+            self._on_interface_selected(0)
 
-        logger.info(f"Port scan complete: {len(self._ports)} port(s) found")
+        logger.info(f"Interface scan: {len(self._interfaces)} CAN interface(s) found")
 
-    def _on_port_selected(self, index: int) -> None:
-        """Handle port selection change."""
-        if index < 0 or index >= len(self._ports):
+    def _on_interface_selected(self, index: int) -> None:
+        """Handle interface selection change."""
+        if index < 0 or index >= len(self._interfaces):
             return
 
-        port = self._ports[index]
-        details = (
-            f"Chip: {port.name}\n"
-            f"Manufacturer: {port.manufacturer or 'Unknown'}\n"
-            f"Score: {port.score}"
-        )
-        if port.by_id_path:
-            details += f"\nStable path: {port.by_id_path}"
+        iface = self._interfaces[index]
+        if iface.interface_type == "virtual":
+            details = "Virtual CAN interface for testing\nUse can-utils to inject messages"
+        else:
+            details = (
+                f"Type: SocketCAN\n"
+                f"Bitrate: {iface.bitrate or 500000} bps\n"
+                f"Status: {'Available' if iface.is_available else 'Unavailable'}"
+            )
 
-        self._port_details.setText(details)
+        self._iface_details.setText(details)
 
     def _on_connect_clicked(self) -> None:
         """Handle connect button click."""
-        index = self._port_combo.currentIndex()
-        if index < 0 or index >= len(self._ports):
-            if self._config.simulation_mode:
-                # Allow connect in simulation mode even without ports
-                self._do_connect(None)
+        index = self._interface_combo.currentIndex()
+        if index < 0 or index >= len(self._interfaces):
+            QMessageBox.warning(
+                self,
+                "No Interface",
+                "Please select a CAN interface first.\n\n"
+                "Connect a SocketCAN adapter and click Rescan.",
+            )
             return
 
-        port = self._ports[index]
-        self._do_connect(port)
+        iface = self._interfaces[index]
+        self._do_connect(iface)
 
-    def _do_connect(self, port: PortInfo | None) -> None:
+    def _do_connect(self, interface: InterfaceInfo) -> None:
         """Perform connection."""
         self._connect_btn.setEnabled(False)
         self._rescan_btn.setEnabled(False)
 
-        if self._connection_manager.connect(port):
+        if self._connection_manager.connect(interface):
             self.connection_established.emit()
         else:
             error = self._connection_manager.last_error
@@ -347,13 +353,13 @@ class ConnectPage(QWidget):
         if new_state == ConnectionState.CONNECTED:
             self._status_label.setText("Connected")
             self._status_label.setStyleSheet("color: #00cc00;")
-            port = self._connection_manager.current_port
-            if port:
-                self._status_detail.setText(f"Connected to {port.device}")
+            iface = self._connection_manager.current_interface
+            if iface:
+                self._status_detail.setText(f"Connected to {iface.name}")
             self._connect_btn.setEnabled(False)
             self._disconnect_btn.setEnabled(True)
             self._rescan_btn.setEnabled(False)
-            self._port_combo.setEnabled(False)
+            self._interface_combo.setEnabled(False)
 
         elif new_state == ConnectionState.CONNECTING:
             self._status_label.setText("Connecting...")
@@ -363,16 +369,16 @@ class ConnectPage(QWidget):
         elif new_state == ConnectionState.VALIDATING:
             self._status_label.setText("Validating...")
             self._status_label.setStyleSheet("color: #cccc00;")
-            self._status_detail.setText("Checking diagnostic link")
+            self._status_detail.setText("Checking CAN bus")
 
         elif new_state == ConnectionState.DISCONNECTED:
             self._status_label.setText("Disconnected")
             self._status_label.setStyleSheet("color: #cc0000;")
             self._status_detail.setText("")
-            self._connect_btn.setEnabled(True)
+            self._connect_btn.setEnabled(len(self._interfaces) > 0)
             self._disconnect_btn.setEnabled(False)
             self._rescan_btn.setEnabled(True)
-            self._port_combo.setEnabled(True)
+            self._interface_combo.setEnabled(True)
 
         elif new_state == ConnectionState.ERROR:
             self._status_label.setText("Error")
@@ -380,6 +386,6 @@ class ConnectPage(QWidget):
             error = self._connection_manager.last_error
             if error:
                 self._status_detail.setText(error.message)
-            self._connect_btn.setEnabled(True)
+            self._connect_btn.setEnabled(len(self._interfaces) > 0)
             self._disconnect_btn.setEnabled(False)
             self._rescan_btn.setEnabled(True)

@@ -22,8 +22,7 @@ logger = get_logger(__name__)
 class ConnectionConfig:
     """Connection-related configuration."""
 
-    preferred_port: str | None = None
-    baud_rate: int = 115200
+    preferred_port: str | None = None  # CAN interface name (can0, etc.)
     timeout: float = 1.0
     retry_count: int = 3
     auto_reconnect: bool = True
@@ -56,14 +55,13 @@ class LoggingConfig:
 class AppConfig:
     """Main application configuration."""
 
-    simulation_mode: bool = False
     datapacks_dir: str = ""
     connection: ConnectionConfig = field(default_factory=ConnectionConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
-    # Last known good port for quick reconnection
-    last_known_port: str | None = None
+    # Last known good interface for quick reconnection
+    last_known_interface: str | None = None
 
     def __post_init__(self) -> None:
         """Initialize default paths."""
@@ -74,12 +72,10 @@ class AppConfig:
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary."""
         return {
-            "simulation_mode": self.simulation_mode,
             "datapacks_dir": self.datapacks_dir,
-            "last_known_port": self.last_known_port,
+            "last_known_interface": self.last_known_interface,
             "connection": {
-                "preferred_port": self.connection.preferred_port,
-                "baud_rate": self.connection.baud_rate,
+                "preferred_interface": self.connection.preferred_port,
                 "timeout": self.connection.timeout,
                 "retry_count": self.connection.retry_count,
                 "auto_reconnect": self.connection.auto_reconnect,
@@ -104,18 +100,15 @@ class AppConfig:
         """Create configuration from dictionary."""
         config = cls()
 
-        if "simulation_mode" in data:
-            config.simulation_mode = data["simulation_mode"]
         if "datapacks_dir" in data:
             config.datapacks_dir = data["datapacks_dir"]
-        if "last_known_port" in data:
-            config.last_known_port = data["last_known_port"]
+        if "last_known_interface" in data:
+            config.last_known_interface = data["last_known_interface"]
 
         if "connection" in data:
             conn = data["connection"]
             config.connection = ConnectionConfig(
-                preferred_port=conn.get("preferred_port"),
-                baud_rate=conn.get("baud_rate", 115200),
+                preferred_port=conn.get("preferred_interface"),
                 timeout=conn.get("timeout", 1.0),
                 retry_count=conn.get("retry_count", 3),
                 auto_reconnect=conn.get("auto_reconnect", True),
