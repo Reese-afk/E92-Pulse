@@ -90,18 +90,18 @@ class TestPortDiscovery:
         discovery = PortDiscovery(last_known_port="/dev/ttyUSB0")
         assert discovery.last_known_port == "/dev/ttyUSB0"
 
-    @patch("e92_pulse.core.discovery.list_ports")
-    def test_discover_empty(self, mock_list_ports):
+    @patch("serial.tools.list_ports.comports")
+    def test_discover_empty(self, mock_comports):
         """Test discovery with no ports."""
-        mock_list_ports.comports.return_value = []
+        mock_comports.return_value = []
 
         discovery = PortDiscovery()
         ports = discovery.discover_ports()
 
         assert ports == []
 
-    @patch("e92_pulse.core.discovery.list_ports")
-    def test_discover_ftdi_port(self, mock_list_ports):
+    @patch("serial.tools.list_ports.comports")
+    def test_discover_ftdi_port(self, mock_comports):
         """Test discovery of FTDI port."""
         mock_port = Mock()
         mock_port.device = "/dev/ttyUSB0"
@@ -113,7 +113,7 @@ class TestPortDiscovery:
         mock_port.manufacturer = "FTDI"
         mock_port.product = "FT232R USB UART"
 
-        mock_list_ports.comports.return_value = [mock_port]
+        mock_comports.return_value = [mock_port]
 
         discovery = PortDiscovery()
         ports = discovery.discover_ports()
@@ -122,8 +122,8 @@ class TestPortDiscovery:
         assert ports[0].chip_type == ChipType.FTDI
         assert ports[0].score >= 80  # FTDI should have high score
 
-    @patch("e92_pulse.core.discovery.list_ports")
-    def test_ftdi_ranked_above_ch340(self, mock_list_ports):
+    @patch("serial.tools.list_ports.comports")
+    def test_ftdi_ranked_above_ch340(self, mock_comports):
         """Test FTDI ports are ranked above CH340."""
         ftdi_port = Mock()
         ftdi_port.device = "/dev/ttyUSB0"
@@ -145,7 +145,7 @@ class TestPortDiscovery:
         ch340_port.manufacturer = None
         ch340_port.product = None
 
-        mock_list_ports.comports.return_value = [ch340_port, ftdi_port]
+        mock_comports.return_value = [ch340_port, ftdi_port]
 
         discovery = PortDiscovery()
         ports = discovery.discover_ports()
@@ -155,8 +155,8 @@ class TestPortDiscovery:
         assert ports[0].chip_type == ChipType.FTDI
         assert ports[1].chip_type == ChipType.CH340
 
-    @patch("e92_pulse.core.discovery.list_ports")
-    def test_by_id_path_bonus(self, mock_list_ports):
+    @patch("serial.tools.list_ports.comports")
+    def test_by_id_path_bonus(self, mock_comports):
         """Test ports with by-id path get bonus."""
         mock_port = Mock()
         mock_port.device = "/dev/ttyUSB0"
@@ -168,7 +168,7 @@ class TestPortDiscovery:
         mock_port.manufacturer = None
         mock_port.product = None
 
-        mock_list_ports.comports.return_value = [mock_port]
+        mock_comports.return_value = [mock_port]
 
         # Mock the _find_by_id_path to return a path
         with patch.object(

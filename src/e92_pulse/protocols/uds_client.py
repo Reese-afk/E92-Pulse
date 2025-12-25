@@ -168,6 +168,13 @@ class UDSClient:
     def set_target(self, address: int) -> None:
         """Set target ECU address."""
         self._target_address = address
+        # Also update transport if it supports target addressing
+        if hasattr(self._transport, "set_target_address"):
+            self._transport.set_target_address(address)
+        # For mock transport with ECU manager
+        if hasattr(self._transport, "_connected_ecu") and self._transport._connected_ecu:
+            if hasattr(self._transport._connected_ecu, "set_target"):
+                self._transport._connected_ecu.set_target(address)
 
     def set_timeout(self, timeout: float) -> None:
         """Set response timeout."""
