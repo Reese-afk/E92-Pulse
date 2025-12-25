@@ -29,6 +29,14 @@ class MockTransport(BaseTransport):
         self._tx_buffer: deque[bytes] = deque()
         self._rx_buffer: deque[bytes] = deque()
         self._connected_ecu: Any = None
+        self._target_address: int = 0x00
+
+    def set_target_address(self, address: int) -> None:
+        """Set target ECU address for routing."""
+        self._target_address = address
+        if self._connected_ecu and hasattr(self._connected_ecu, "set_target"):
+            self._connected_ecu.set_target(address)
+        logger.debug(f"[MOCK] Target address set to 0x{address:02X}")
 
     def open(self, port: str, baud_rate: int = 115200) -> bool:
         """Simulate opening a port."""

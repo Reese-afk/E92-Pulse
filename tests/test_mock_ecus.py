@@ -80,8 +80,9 @@ class TestMockECU:
 
         assert response is not None
         assert response[0] == 0x59  # Positive response
-        # Count should be 2
-        count = int.from_bytes(response[3:5], "big")
+        # Response structure: [0x59, SubFunc, StatusMask, FormatID, CountHigh, CountLow]
+        # Count should be 2 (at bytes 4:6)
+        count = int.from_bytes(response[4:6], "big")
         assert count == 2
 
     def test_read_dtc_by_status(self):
