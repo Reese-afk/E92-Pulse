@@ -221,9 +221,12 @@ class SerialTransport(BaseTransport):
 
             logger.debug(f"TX ({len(framed_data)}): {framed_data.hex()}")
 
-            # Wait for echo (K+DCAN cables echo transmitted data)
-            time.sleep(0.01)
-            self._serial.read(len(framed_data))  # Discard echo
+            # Some K+DCAN cables echo transmitted data, some don't
+            # Give a small delay and try to flush any echo
+            time.sleep(0.02)
+            if self._serial.in_waiting > 0:
+                echo = self._serial.read(self._serial.in_waiting)
+                logger.debug(f"Discarded echo: {echo.hex()}")
 
             return True
 
@@ -233,39 +236,33 @@ class SerialTransport(BaseTransport):
 
     def _frame_message(self, data: bytes) -> bytes:
         """
-        Frame UDS data with BMW protocol header.
+        Frame UDS data for BMW K+DCAN cable.
 
-        BMW uses a modified ISO 14230 format:
-        [Format] [Target] [Source] [Length] [Data...] [Checksum]
+        K+DCAN cables have an internal CAN transceiver. For D-CAN mode,
+        messages are sent with a simple length prefix and the cable
+        handles CAN arbitration internally.
 
-        For D-CAN, the format byte indicates message structure.
+        Format for D-CAN: [Length] [UDS Data...]
+        Format for K-line: ISO 14230 framing with header + checksum
         """
         if self._use_dcan:
-            # D-CAN format: simpler framing
-            # Format: 0x00 + length in format byte for short messages
+            # D-CAN mode: K+DCAN cable handles CAN framing internally
+            # We just need to tell the cable which ECU to talk to
+            # Common format: [Target ECU ID] [Length] [UDS Data...]
+            # Some cables use: [Length] [UDS Data...]
+
+            # Try simple format first - many K+DCAN cables just want raw UDS
+            # with length prefix
             length = len(data)
 
-            if length <= 7:
-                # Single frame: format byte contains length
-                format_byte = 0x80 | length
-                frame = bytes([format_byte, self._target_address, self._source_address])
-                frame += data
-            else:
-                # Multi-frame would need ISO-TP segmentation
-                # For now, support single frames only
-                format_byte = 0x80 | 0x00  # Indicates length in next byte
-                frame = bytes([format_byte, self._target_address, self._source_address, length])
-                frame += data
+            # Format: Single byte length + UDS data
+            # The cable routes based on the diagnostic address
+            frame = bytes([length]) + data
 
-            # Add checksum (XOR of all bytes)
-            checksum = 0
-            for b in frame:
-                checksum ^= b
-            frame += bytes([checksum])
-
+            logger.debug(f"TX frame (D-CAN raw): {frame.hex()}")
             return frame
         else:
-            # K-line ISO 14230 format
+            # K-line ISO 14230 format with full header
             length = len(data)
             if length < 64:
                 format_byte = 0x80 | length
@@ -302,48 +299,82 @@ class SerialTransport(BaseTransport):
 
         try:
             self._serial.timeout = timeout
-            start_time = time.time()
 
-            # Read header (format + target + source)
-            header = self._serial.read(3)
-            if len(header) < 3:
-                return None
+            if self._use_dcan:
+                # D-CAN mode: K+DCAN cable sends responses in simple format
+                # Read first byte to get length
+                length_byte = self._serial.read(1)
+                if not length_byte:
+                    return None
 
-            format_byte = header[0]
+                length = length_byte[0]
 
-            # Extract length from format byte
-            if format_byte & 0x80:
-                length = format_byte & 0x3F
-                if length == 0:
-                    # Length in next byte
-                    length_byte = self._serial.read(1)
-                    if not length_byte:
-                        return None
-                    length = length_byte[0]
+                # Sanity check on length
+                if length == 0 or length > 255:
+                    # Might be getting raw UDS response, try reading more
+                    # and interpreting the first byte as service ID
+                    remaining = self._serial.read(64)
+                    if remaining:
+                        payload = length_byte + remaining.rstrip(b'\x00')
+                        logger.debug(f"RX (raw): {payload.hex()}")
+                        return payload
+                    return None
+
+                # Read the UDS data
+                data = self._serial.read(length)
+                if len(data) < length:
+                    logger.warning(f"Incomplete response: got {len(data)}, expected {length}")
+                    # Return what we got
+                    if data:
+                        logger.debug(f"RX (partial): {data.hex()}")
+                        return data
+                    return None
+
+                logger.debug(f"RX ({len(data)}): {data.hex()}")
+                return data
+
             else:
-                length = format_byte & 0x3F
+                # K-line ISO 14230 format with header + checksum
+                # Read header (format + target + source)
+                header = self._serial.read(3)
+                if len(header) < 3:
+                    return None
 
-            # Read data + checksum
-            remaining = length + 1  # data + checksum
-            data = self._serial.read(remaining)
+                format_byte = header[0]
 
-            if len(data) < remaining:
-                logger.warning(f"Incomplete response: got {len(data)}, expected {remaining}")
-                return None
+                # Extract length from format byte
+                if format_byte & 0x80:
+                    length = format_byte & 0x3F
+                    if length == 0:
+                        # Length in next byte
+                        length_byte = self._serial.read(1)
+                        if not length_byte:
+                            return None
+                        length = length_byte[0]
+                else:
+                    length = format_byte & 0x3F
 
-            # Verify checksum
-            full_message = header + data[:-1]  # Exclude received checksum
-            calc_checksum = 0
-            for b in full_message:
-                calc_checksum ^= b
+                # Read data + checksum
+                remaining = length + 1  # data + checksum
+                data = self._serial.read(remaining)
 
-            if calc_checksum != data[-1]:
-                logger.warning(f"Checksum mismatch: calc=0x{calc_checksum:02X}, recv=0x{data[-1]:02X}")
-                # Continue anyway - some ECUs have checksum quirks
+                if len(data) < remaining:
+                    logger.warning(f"Incomplete response: got {len(data)}, expected {remaining}")
+                    return None
 
-            payload = data[:-1]  # Return data without checksum
-            logger.debug(f"RX ({len(payload)}): {payload.hex()}")
-            return payload
+                # Verify checksum
+                full_message = header + data[:-1]  # Exclude received checksum
+                calc_checksum = 0
+                for b in full_message:
+                    calc_checksum ^= b
+
+                if calc_checksum != data[-1]:
+                    logger.warning(f"Checksum mismatch: calc=0x{calc_checksum:02X}, recv=0x{data[-1]:02X}")
+                    # Continue anyway - some ECUs have checksum quirks
+
+                payload = data[:-1]  # Return data without checksum
+                logger.debug(f"RX ({len(payload)}): {payload.hex()}")
+                return payload
 
         except Exception as e:
             logger.error(f"Serial read error: {e}")
