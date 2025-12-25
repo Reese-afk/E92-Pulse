@@ -104,10 +104,10 @@ class SerialTransport(BaseTransport):
         """
         Initialize D-CAN mode on K+DCAN cable.
 
-        Different cables use different DTR/RTS combinations:
-        - Most cables: DTR=1, RTS=0
-        - Some cables: DTR=0, RTS=1
-        - HX cables often: DTR=1, RTS=1
+        Different cables use different activation methods:
+        - DTR/RTS control lines
+        - Break condition
+        - Wake-up byte sequence
 
         Returns:
             True if D-CAN mode initialized successfully
@@ -116,20 +116,31 @@ class SerialTransport(BaseTransport):
             return False
 
         try:
-            # Try the most common D-CAN mode setting first
-            # For HX D-CAN cables, try DTR=1, RTS=1 (both high)
+            # Method 1: Try break condition first (some cables need this)
+            logger.info("Trying D-CAN activation with break condition...")
+            self._serial.break_condition = True
+            time.sleep(0.025)  # 25ms break
+            self._serial.break_condition = False
+            time.sleep(0.025)
+
+            # Method 2: Set DTR/RTS lines
+            # Try different combinations - some cables are wired differently
             self._serial.dtr = True
             self._serial.rts = True
-            time.sleep(0.1)
+            time.sleep(0.05)
 
-            # Clear break condition
-            self._serial.break_condition = False
-
-            # Flush any garbage
+            # Flush buffers
             self._serial.reset_input_buffer()
             self._serial.reset_output_buffer()
 
-            logger.info("D-CAN mode initialized (DTR=1, RTS=1)")
+            # Method 3: Send wake-up pattern (some cables need this)
+            # Send 5-baud init pattern approximation
+            wake_up = bytes([0x00, 0x00, 0x00])
+            self._serial.write(wake_up)
+            time.sleep(0.1)
+            self._serial.reset_input_buffer()  # Discard any echo
+
+            logger.info("D-CAN mode initialized (DTR=1, RTS=1, break sent)")
             return True
 
         except Exception as e:
