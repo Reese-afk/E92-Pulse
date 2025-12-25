@@ -104,9 +104,10 @@ class SerialTransport(BaseTransport):
         """
         Initialize D-CAN mode on K+DCAN cable.
 
-        Most K+DCAN cables use the 8th pin of the OBD port for D-CAN.
-        The cable switches between K-line and D-CAN based on serial
-        control lines (DTR/RTS).
+        Different cables use different DTR/RTS combinations:
+        - Most cables: DTR=1, RTS=0
+        - Some cables: DTR=0, RTS=1
+        - HX cables often: DTR=1, RTS=1
 
         Returns:
             True if D-CAN mode initialized successfully
@@ -115,21 +116,20 @@ class SerialTransport(BaseTransport):
             return False
 
         try:
-            # D-CAN mode: Set DTR=1, RTS=0 for most cables
-            # This routes communication to pin 6 (CAN-H) via the cable's
-            # internal CAN transceiver
+            # Try the most common D-CAN mode setting first
+            # For HX D-CAN cables, try DTR=1, RTS=1 (both high)
             self._serial.dtr = True
-            self._serial.rts = False
+            self._serial.rts = True
             time.sleep(0.1)
 
-            # Some cables need a specific sequence
+            # Clear break condition
             self._serial.break_condition = False
 
             # Flush any garbage
             self._serial.reset_input_buffer()
             self._serial.reset_output_buffer()
 
-            logger.info("D-CAN mode initialized (DTR=1, RTS=0)")
+            logger.info("D-CAN mode initialized (DTR=1, RTS=1)")
             return True
 
         except Exception as e:
@@ -221,12 +221,14 @@ class SerialTransport(BaseTransport):
 
             logger.debug(f"TX ({len(framed_data)}): {framed_data.hex()}")
 
-            # Some K+DCAN cables echo transmitted data, some don't
-            # Give a small delay and try to flush any echo
-            time.sleep(0.02)
-            if self._serial.in_waiting > 0:
-                echo = self._serial.read(self._serial.in_waiting)
-                logger.debug(f"Discarded echo: {echo.hex()}")
+            # K+DCAN cables echo transmitted data back
+            # We must read and discard the echo before reading the response
+            time.sleep(0.05)  # Wait for echo to arrive
+            echo = self._serial.read(len(framed_data))
+            if echo:
+                logger.debug(f"Echo ({len(echo)}): {echo.hex()}")
+                if echo != framed_data:
+                    logger.warning(f"Echo mismatch! Sent: {framed_data.hex()}, Got: {echo.hex()}")
 
             return True
 
