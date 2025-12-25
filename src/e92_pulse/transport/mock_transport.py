@@ -25,7 +25,7 @@ class MockTransport(BaseTransport):
 
     def __init__(self) -> None:
         self._is_open: bool = False
-        self._port: str | None = None
+        self._interface: str | None = None
         self._tx_buffer: deque[bytes] = deque()
         self._rx_buffer: deque[bytes] = deque()
         self._connected_ecu: Any = None
@@ -38,18 +38,18 @@ class MockTransport(BaseTransport):
             self._connected_ecu.set_target(address)
         logger.debug(f"[MOCK] Target address set to 0x{address:02X}")
 
-    def open(self, port: str, baud_rate: int = 115200) -> bool:
-        """Simulate opening a port."""
-        logger.info(f"[MOCK] Opening port: {port} @ {baud_rate}")
+    def open(self, interface: str, bitrate: int = 500000) -> bool:
+        """Simulate opening a CAN interface."""
+        logger.info(f"[MOCK] Opening interface: {interface} @ {bitrate} bps")
         self._is_open = True
-        self._port = port
+        self._interface = interface
         return True
 
     def close(self) -> None:
-        """Simulate closing the port."""
-        logger.info("[MOCK] Closing port")
+        """Simulate closing the interface."""
+        logger.info("[MOCK] Closing interface")
         self._is_open = False
-        self._port = None
+        self._interface = None
         self._tx_buffer.clear()
         self._rx_buffer.clear()
 
@@ -127,7 +127,7 @@ class MockTransport(BaseTransport):
         """Get transport information."""
         return {
             "type": "mock",
-            "port": self._port,
+            "interface": self._interface,
             "is_open": self._is_open,
             "tx_count": len(self._tx_buffer),
             "rx_pending": len(self._rx_buffer),

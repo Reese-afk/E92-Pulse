@@ -1,10 +1,18 @@
 """
-Serial Transport Implementation
+Serial Transport Implementation (DEPRECATED)
 
-Implements K+DCAN serial communication for BMW diagnostics.
-Handles serial port configuration, timing, and low-level protocol.
+NOTE: This module is DEPRECATED. K+DCAN cables require proprietary
+Windows drivers and do not work properly on Linux via serial.
 
-BMW K+DCAN Protocol Notes:
+For Linux, use the CAN transport with a SocketCAN-compatible adapter:
+- PEAK PCAN-USB
+- Kvaser
+- CANable
+- Or similar SocketCAN devices
+
+See: can_transport.py for the correct Linux implementation.
+
+Original K+DCAN Protocol Notes (historical):
 - K-line: ISO 14230 (KWP2000) at 10400 baud for older modules
 - D-CAN: ISO 15765 (CAN over serial) at 115200 baud for newer modules
 - Most E92 modules use D-CAN at 500kbps CAN speed, 115200 serial
@@ -22,6 +30,9 @@ logger = get_logger(__name__)
 class SerialTransport(BaseTransport):
     """
     Serial transport for K+DCAN USB cables.
+
+    DEPRECATED: K+DCAN cables do not work properly on Linux.
+    Use CANTransport with a SocketCAN adapter instead.
 
     Implements the low-level serial communication required
     for BMW diagnostic protocols over K-line/D-CAN.
