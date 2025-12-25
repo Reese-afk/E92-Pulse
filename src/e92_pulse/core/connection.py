@@ -4,7 +4,6 @@ Connection Manager
 Manages the lifecycle of diagnostic connections including:
 - Connection establishment and validation
 - Support for SocketCAN interfaces (Linux-native)
-- Simulation mode fallback
 - State management and event notifications
 """
 
@@ -66,7 +65,7 @@ class InterfaceInfo:
     """Information about a CAN interface."""
 
     name: str  # e.g., "can0", "vcan0"
-    interface_type: str  # "socketcan", "virtual", "simulation"
+    interface_type: str  # "socketcan", "virtual"
     description: str
     is_available: bool
     bitrate: int | None = None
@@ -93,7 +92,6 @@ class ConnectionManager:
     Supports:
     - SocketCAN interfaces (can0, can1, etc.)
     - Virtual CAN for testing (vcan0)
-    - Simulation mode (no hardware required)
     """
 
     config: AppConfig
@@ -102,11 +100,6 @@ class ConnectionManager:
     _current_interface: InterfaceInfo | None = None
     _state_callbacks: list[StateChangeCallback] = field(default_factory=list)
     _last_error: ConnectionError | None = None
-    _simulation_mode: bool = False
-
-    def __post_init__(self) -> None:
-        """Initialize connection manager."""
-        self._simulation_mode = self.config.simulation_mode
 
     @property
     def state(self) -> ConnectionState:
@@ -128,19 +121,6 @@ class ConnectionManager:
         """Check if currently connected."""
         return self._state == ConnectionState.CONNECTED
 
-    @property
-    def simulation_mode(self) -> bool:
-        """Check if in simulation mode."""
-        return self._simulation_mode
-
-    def set_simulation_mode(self, enabled: bool) -> None:
-        """Enable or disable simulation mode."""
-        if self.is_connected:
-            self.disconnect()
-        self._simulation_mode = enabled
-        self._transport = None
-        logger.info(f"Simulation mode: {enabled}")
-
     def add_state_callback(self, callback: StateChangeCallback) -> None:
         """Add a callback for state changes."""
         self._state_callbacks.append(callback)
@@ -155,20 +135,9 @@ class ConnectionManager:
         Discover available CAN interfaces.
 
         Returns:
-            List of available interfaces (SocketCAN + simulation)
+            List of available SocketCAN interfaces
         """
         interfaces: list[InterfaceInfo] = []
-
-        # Always add simulation mode option
-        interfaces.append(
-            InterfaceInfo(
-                name="simulation",
-                interface_type="simulation",
-                description="Simulation Mode (No Hardware)",
-                is_available=True,
-                bitrate=None,
-            )
-        )
 
         # Check for SocketCAN interfaces
         try:
@@ -191,12 +160,12 @@ class ConnectionManager:
 
         return interfaces
 
-    def connect(self, interface: str | InterfaceInfo | None = None) -> bool:
+    def connect(self, interface: str | InterfaceInfo) -> bool:
         """
         Establish a diagnostic connection.
 
         Args:
-            interface: Interface to connect to (name, InterfaceInfo, or None for simulation)
+            interface: Interface to connect to (name or InterfaceInfo)
 
         Returns:
             True if connection successful
@@ -208,24 +177,14 @@ class ConnectionManager:
         self._set_state(ConnectionState.CONNECTING)
 
         # Resolve interface
-        interface_info: InterfaceInfo | None = None
-
-        if interface is None or interface == "simulation" or self._simulation_mode:
-            # Use simulation mode
-            interface_info = InterfaceInfo(
-                name="simulation",
-                interface_type="simulation",
-                description="Simulation Mode",
-                is_available=True,
-            )
-            self._simulation_mode = True
-        elif isinstance(interface, InterfaceInfo):
+        if isinstance(interface, InterfaceInfo):
             interface_info = interface
         else:
             # It's an interface name string
+            is_virtual = interface.startswith("vcan")
             interface_info = InterfaceInfo(
                 name=interface,
-                interface_type="socketcan",
+                interface_type="virtual" if is_virtual else "socketcan",
                 description=f"CAN Interface {interface}",
                 is_available=True,
                 bitrate=500000,
@@ -239,42 +198,29 @@ class ConnectionManager:
 
         try:
             # Attempt to open transport
-            if interface_info.interface_type == "simulation":
-                # Mock transport doesn't need real interface
-                if not self._transport.open("simulation", 0):
-                    self._set_error(
-                        "Failed to initialize simulation",
-                        "SIM_INIT_FAILED",
-                        recoverable=True,
-                        suggestion="Restart the application",
-                    )
-                    return False
-            else:
-                # Real CAN interface
-                bitrate = interface_info.bitrate or 500000
-                if not self._transport.open(interface_info.name, bitrate):
-                    self._set_error(
-                        f"Failed to open CAN interface {interface_info.name}",
-                        "CAN_OPEN_FAILED",
-                        recoverable=True,
-                        suggestion="Check if interface is up: sudo ip link set can0 up type can bitrate 500000",
-                    )
-                    return False
+            bitrate = interface_info.bitrate or 500000
+            if not self._transport.open(interface_info.name, bitrate):
+                self._set_error(
+                    f"Failed to open CAN interface {interface_info.name}",
+                    "CAN_OPEN_FAILED",
+                    recoverable=True,
+                    suggestion="Check if interface is up: sudo ip link set can0 up type can bitrate 500000",
+                )
+                return False
 
             self._current_interface = interface_info
             self._set_state(ConnectionState.VALIDATING)
 
             # Validate connection
             if not self._transport.validate():
-                if interface_info.interface_type != "simulation":
-                    self._transport.close()
-                    self._set_error(
-                        "CAN bus validation failed",
-                        "VALIDATION_FAILED",
-                        recoverable=True,
-                        suggestion="Check CAN adapter and vehicle connection",
-                    )
-                    return False
+                self._transport.close()
+                self._set_error(
+                    "CAN bus validation failed",
+                    "VALIDATION_FAILED",
+                    recoverable=True,
+                    suggestion="Check CAN adapter and vehicle connection",
+                )
+                return False
 
             self._set_state(ConnectionState.CONNECTED)
 
@@ -321,7 +267,7 @@ class ConnectionManager:
         logger.info("Disconnected")
 
     def set_transport(self, transport: Any) -> None:
-        """Set the transport implementation (for testing/simulation)."""
+        """Set the transport implementation (for testing)."""
         self._transport = transport
 
     def get_transport(self) -> Any:
@@ -329,17 +275,11 @@ class ConnectionManager:
         return self._transport
 
     def _create_transport(self) -> Any:
-        """Create the appropriate transport instance."""
-        if self._simulation_mode:
-            from e92_pulse.transport.mock_transport import MockTransport
+        """Create the CAN transport instance."""
+        from e92_pulse.transport.can_transport import CANTransport
 
-            logger.info("Using simulation transport")
-            return MockTransport()
-        else:
-            from e92_pulse.transport.can_transport import CANTransport
-
-            logger.info("Using CAN transport (SocketCAN)")
-            return CANTransport()
+        logger.info("Using CAN transport (SocketCAN)")
+        return CANTransport()
 
     def _set_state(self, new_state: ConnectionState) -> None:
         """Update state and notify callbacks."""

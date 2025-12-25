@@ -71,7 +71,7 @@ class ConnectPage(QWidget):
         layout.addWidget(title)
 
         subtitle = QLabel(
-            "Select a CAN interface or use simulation mode"
+            "Select a SocketCAN interface to begin diagnostics"
         )
         subtitle.setFont(QFont("Sans", 12))
         subtitle.setStyleSheet("color: #888888;")
@@ -142,6 +142,7 @@ class ConnectPage(QWidget):
         self._connect_btn.setMinimumHeight(50)
         self._connect_btn.setFont(QFont("Sans", 12, QFont.Weight.Bold))
         self._connect_btn.clicked.connect(self._on_connect_clicked)
+        self._connect_btn.setEnabled(False)  # Disabled until interface found
         btn_layout.addWidget(self._connect_btn)
 
         self._disconnect_btn = QPushButton("Disconnect")
@@ -211,11 +212,10 @@ class ConnectPage(QWidget):
         """)
         self._trouble_text.setHtml("""
             <p style="color: #888888;">
-            <b>No CAN interfaces?</b><br>
-            - Check CAN adapter connection<br>
+            <b>No CAN interfaces detected?</b><br>
+            - Connect your SocketCAN adapter<br>
             - Set up interface with:<br>
-            <code style="color: #00cccc;">sudo ip link set can0 up type can bitrate 500000</code><br>
-            - Or use simulation mode for testing<br><br>
+            <code style="color: #00cccc;">sudo ip link set can0 up type can bitrate 500000</code><br><br>
             <b>Connection fails?</b><br>
             - Ensure ignition is ON<br>
             - Verify CAN adapter is recognized (dmesg)<br>
@@ -266,26 +266,30 @@ class ConnectPage(QWidget):
         self._interface_combo.clear()
         self._interfaces = self._connection_manager.discover_interfaces()
 
-        # Interfaces always includes simulation, so check for real interfaces
-        real_interfaces = [i for i in self._interfaces if i.interface_type != "simulation"]
+        if not self._interfaces:
+            self._interface_combo.addItem("No CAN interfaces detected")
+            self._interface_combo.setEnabled(False)
+            self._connect_btn.setEnabled(False)
+            self._iface_details.setText(
+                "No SocketCAN interfaces found.\n"
+                "Connect a CAN adapter and configure it."
+            )
+        else:
+            self._interface_combo.setEnabled(True)
+            self._connect_btn.setEnabled(True)
 
-        self._interface_combo.setEnabled(True)
-        self._connect_btn.setEnabled(True)
+            for iface in self._interfaces:
+                if iface.interface_type == "virtual":
+                    display = f"{iface.name} - Virtual CAN (Testing)"
+                else:
+                    display = f"{iface.name} - CAN Interface @ 500kbps"
+                self._interface_combo.addItem(display)
 
-        for iface in self._interfaces:
-            if iface.interface_type == "simulation":
-                display = "Simulation Mode (No Hardware)"
-            elif iface.interface_type == "virtual":
-                display = f"{iface.name} - Virtual CAN (Testing)"
-            else:
-                display = f"{iface.name} - CAN Interface @ 500kbps"
-            self._interface_combo.addItem(display)
+            # Select first interface
+            self._interface_combo.setCurrentIndex(0)
+            self._on_interface_selected(0)
 
-        # Select first interface
-        self._interface_combo.setCurrentIndex(0)
-        self._on_interface_selected(0)
-
-        logger.info(f"Interface scan: {len(real_interfaces)} CAN interface(s) + simulation")
+        logger.info(f"Interface scan: {len(self._interfaces)} CAN interface(s) found")
 
     def _on_interface_selected(self, index: int) -> None:
         """Handle interface selection change."""
@@ -293,10 +297,8 @@ class ConnectPage(QWidget):
             return
 
         iface = self._interfaces[index]
-        if iface.interface_type == "simulation":
-            details = "Simulated ECU responses for testing\nNo hardware required"
-        elif iface.interface_type == "virtual":
-            details = f"Virtual CAN interface for testing\nUse can-utils to inject messages"
+        if iface.interface_type == "virtual":
+            details = "Virtual CAN interface for testing\nUse can-utils to inject messages"
         else:
             details = (
                 f"Type: SocketCAN\n"
@@ -310,14 +312,18 @@ class ConnectPage(QWidget):
         """Handle connect button click."""
         index = self._interface_combo.currentIndex()
         if index < 0 or index >= len(self._interfaces):
-            # Default to simulation mode
-            self._do_connect(None)
+            QMessageBox.warning(
+                self,
+                "No Interface",
+                "Please select a CAN interface first.\n\n"
+                "Connect a SocketCAN adapter and click Rescan.",
+            )
             return
 
         iface = self._interfaces[index]
         self._do_connect(iface)
 
-    def _do_connect(self, interface: InterfaceInfo | None) -> None:
+    def _do_connect(self, interface: InterfaceInfo) -> None:
         """Perform connection."""
         self._connect_btn.setEnabled(False)
         self._rescan_btn.setEnabled(False)
@@ -369,7 +375,7 @@ class ConnectPage(QWidget):
             self._status_label.setText("Disconnected")
             self._status_label.setStyleSheet("color: #cc0000;")
             self._status_detail.setText("")
-            self._connect_btn.setEnabled(True)
+            self._connect_btn.setEnabled(len(self._interfaces) > 0)
             self._disconnect_btn.setEnabled(False)
             self._rescan_btn.setEnabled(True)
             self._interface_combo.setEnabled(True)
@@ -380,6 +386,6 @@ class ConnectPage(QWidget):
             error = self._connection_manager.last_error
             if error:
                 self._status_detail.setText(error.message)
-            self._connect_btn.setEnabled(True)
+            self._connect_btn.setEnabled(len(self._interfaces) > 0)
             self._disconnect_btn.setEnabled(False)
             self._rescan_btn.setEnabled(True)
