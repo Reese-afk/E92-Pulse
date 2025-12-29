@@ -100,20 +100,44 @@ SERVICE_RESETS = {
     "air_filter": {"name": "Air Filter", "cbs_type": CBS_AIR_FILTER},
 }
 
-# Common BMW DTC descriptions
+# Comprehensive BMW E92 M3 DTC Database
+# Organized by system for easy lookup
 DTC_DESCRIPTIONS = {
+    # === Engine/DME (S65 V8) ===
     0x0100: "Mass Air Flow Circuit Malfunction",
     0x0101: "Mass Air Flow Circuit Range/Performance",
     0x0102: "Mass Air Flow Circuit Low Input",
     0x0103: "Mass Air Flow Circuit High Input",
     0x0110: "Intake Air Temperature Circuit Malfunction",
     0x0115: "Engine Coolant Temperature Circuit Malfunction",
+    0x0116: "Engine Coolant Temp Circuit Range/Performance",
+    0x0117: "Engine Coolant Temp Circuit Low",
+    0x0118: "Engine Coolant Temp Circuit High",
     0x0120: "Throttle Position Sensor Circuit Malfunction",
+    0x0121: "Throttle Position Sensor Range/Performance",
+    0x0122: "Throttle Position Sensor Low",
+    0x0123: "Throttle Position Sensor High",
     0x0130: "O2 Sensor Circuit Malfunction (Bank 1 Sensor 1)",
+    0x0131: "O2 Sensor Low Voltage (Bank 1 Sensor 1)",
+    0x0132: "O2 Sensor High Voltage (Bank 1 Sensor 1)",
+    0x0133: "O2 Sensor Slow Response (Bank 1 Sensor 1)",
+    0x0134: "O2 Sensor No Activity (Bank 1 Sensor 1)",
+    0x0135: "O2 Sensor Heater Circuit (Bank 1 Sensor 1)",
+    0x0150: "O2 Sensor Circuit Malfunction (Bank 2 Sensor 1)",
+    0x0151: "O2 Sensor Low Voltage (Bank 2 Sensor 1)",
+    0x0152: "O2 Sensor High Voltage (Bank 2 Sensor 1)",
     0x0171: "System Too Lean (Bank 1)",
     0x0172: "System Too Rich (Bank 1)",
     0x0174: "System Too Lean (Bank 2)",
     0x0175: "System Too Rich (Bank 2)",
+    0x0201: "Injector Circuit Malfunction - Cylinder 1",
+    0x0202: "Injector Circuit Malfunction - Cylinder 2",
+    0x0203: "Injector Circuit Malfunction - Cylinder 3",
+    0x0204: "Injector Circuit Malfunction - Cylinder 4",
+    0x0205: "Injector Circuit Malfunction - Cylinder 5",
+    0x0206: "Injector Circuit Malfunction - Cylinder 6",
+    0x0207: "Injector Circuit Malfunction - Cylinder 7",
+    0x0208: "Injector Circuit Malfunction - Cylinder 8",
     0x0300: "Random/Multiple Cylinder Misfire Detected",
     0x0301: "Cylinder 1 Misfire Detected",
     0x0302: "Cylinder 2 Misfire Detected",
@@ -123,17 +147,182 @@ DTC_DESCRIPTIONS = {
     0x0306: "Cylinder 6 Misfire Detected",
     0x0307: "Cylinder 7 Misfire Detected",
     0x0308: "Cylinder 8 Misfire Detected",
+    0x0335: "Crankshaft Position Sensor A Circuit",
+    0x0336: "Crankshaft Position Sensor A Range/Performance",
+    0x0340: "Camshaft Position Sensor A Circuit (Bank 1)",
+    0x0341: "Camshaft Position Sensor A Range/Performance (Bank 1)",
+    0x0345: "Camshaft Position Sensor A Circuit (Bank 2)",
+    0x0365: "Camshaft Position Sensor B Circuit (Bank 1)",
+    0x0390: "Camshaft Position Sensor B Circuit (Bank 2)",
     0x0420: "Catalyst Efficiency Below Threshold (Bank 1)",
     0x0430: "Catalyst Efficiency Below Threshold (Bank 2)",
+    0x0442: "EVAP System Leak Detected (Small)",
+    0x0455: "EVAP System Leak Detected (Large)",
     0x0500: "Vehicle Speed Sensor Malfunction",
-    # BMW-specific codes
+    0x0505: "Idle Control System Malfunction",
+    0x0506: "Idle Control System RPM Lower Than Expected",
+    0x0507: "Idle Control System RPM Higher Than Expected",
+
+    # === S65 V8 Specific (VANOS/Throttle) ===
+    0x1520: "VANOS Exhaust Timing Over-Retarded (Bank 1)",
+    0x1521: "VANOS Exhaust Timing Over-Advanced (Bank 1)",
+    0x1523: "VANOS Intake Timing Over-Retarded (Bank 1)",
+    0x1524: "VANOS Intake Timing Over-Advanced (Bank 1)",
+    0x1530: "VANOS Exhaust Timing Over-Retarded (Bank 2)",
+    0x1531: "VANOS Exhaust Timing Over-Advanced (Bank 2)",
+    0x1533: "VANOS Intake Timing Over-Retarded (Bank 2)",
+    0x1534: "VANOS Intake Timing Over-Advanced (Bank 2)",
+    0x2A05: "Throttle Actuator Control Motor Circuit Open",
+    0x2A07: "Throttle Actuator Control Motor Performance",
+    0x2AAE: "Electric Fuel Pump Control Circuit",
     0x2AAF: "Fuel Pump Control Circuit",
     0x2DFC: "DME: Internal Error",
-    0x30FF: "O2 Sensor Heater Control Circuit",
+
+    # === Transmission/EGS (SMG/DCT) ===
+    0x0700: "Transmission Control System Malfunction",
+    0x0705: "Transmission Range Sensor Circuit",
+    0x0710: "Transmission Fluid Temperature Sensor Circuit",
+    0x0715: "Input/Turbine Speed Sensor Circuit",
+    0x0720: "Output Speed Sensor Circuit",
+    0x0730: "Incorrect Gear Ratio",
+    0x0740: "Torque Converter Clutch Solenoid",
+    0x0750: "Shift Solenoid A Malfunction",
+    0x0755: "Shift Solenoid B Malfunction",
+    0x0760: "Shift Solenoid C Malfunction",
+    0x0765: "Shift Solenoid D Malfunction",
+    0x17F0: "SMG Hydraulic Pump Motor",
+    0x17F1: "SMG Clutch Position Sensor",
+    0x17F2: "SMG Gear Position Sensor",
+
+    # === DSC/ABS ===
+    0x0562: "System Voltage Low",
+    0x0563: "System Voltage High",
     0x4010: "DSC: System Malfunction",
+    0xC000: "ABS Hydraulic Pump Motor",
+    0xC100: "Wheel Speed Sensor Front Left",
+    0xC110: "Wheel Speed Sensor Front Right",
+    0xC120: "Wheel Speed Sensor Rear Left",
+    0xC130: "Wheel Speed Sensor Rear Right",
+    0xC150: "ABS Control Module Internal Error",
+    0xC200: "Steering Angle Sensor",
+    0xC210: "Yaw Rate Sensor",
+    0xC220: "Lateral Acceleration Sensor",
+    0xC230: "Longitudinal Acceleration Sensor",
+
+    # === FRM (Footwell Module) ===
     0xA0A0: "FRM: Internal Error",
+    0xA0A1: "FRM: EEPROM Error",
     0xA0B0: "FRM: Light Output Error",
+    0xA0B1: "FRM: Headlight Left Short Circuit",
+    0xA0B2: "FRM: Headlight Right Short Circuit",
+    0xA0B3: "FRM: Turn Signal Left Malfunction",
+    0xA0B4: "FRM: Turn Signal Right Malfunction",
+    0xA0B5: "FRM: Brake Light Left Error",
+    0xA0B6: "FRM: Brake Light Right Error",
+    0xA0B7: "FRM: Tail Light Error",
+    0xA0C0: "FRM: Window Regulator Front Left",
+    0xA0C1: "FRM: Window Regulator Front Right",
+    0xA0C2: "FRM: Window Regulator Rear Left",
+    0xA0C3: "FRM: Window Regulator Rear Right",
+    0xA0D0: "FRM: Central Locking Malfunction",
+    0xA0E0: "FRM: Wiper Motor Error",
+
+    # === CAS (Car Access System) ===
+    0xA100: "CAS: EWS Manipulation Detected",
+    0xA101: "CAS: Key Not Detected",
+    0xA102: "CAS: Key Battery Low",
+    0xA103: "CAS: Starter Signal Error",
+    0xA104: "CAS: Terminal 15 Error",
+    0xA105: "CAS: Terminal 50 Error",
+
+    # === KOMBI (Instrument Cluster) ===
+    0xA200: "KOMBI: Internal Error",
+    0xA201: "KOMBI: Fuel Level Sensor",
+    0xA202: "KOMBI: Coolant Level Sensor",
+    0xA203: "KOMBI: Oil Level Sensor",
+    0xA204: "KOMBI: Ambient Temperature Sensor",
+
+    # === Communication Bus ===
     0xD000: "Communication Bus Error",
+    0xD001: "PT-CAN Communication Error",
+    0xD002: "K-CAN Communication Error",
+    0xD003: "MOST Bus Communication Error",
+    0xD100: "Lost Communication with DME",
+    0xD101: "Lost Communication with EGS",
+    0xD102: "Lost Communication with DSC",
+    0xD103: "Lost Communication with FRM",
+    0xD104: "Lost Communication with CAS",
+
+    # === Airbag/SRS ===
+    0xB1000: "Airbag Control Module Internal Error",
+    0xB1001: "Driver Airbag Circuit",
+    0xB1002: "Passenger Airbag Circuit",
+    0xB1003: "Side Airbag Driver Circuit",
+    0xB1004: "Side Airbag Passenger Circuit",
+    0xB1010: "Seatbelt Pretensioner Driver",
+    0xB1011: "Seatbelt Pretensioner Passenger",
+    0xB1020: "Crash Sensor Front",
+    0xB1021: "Crash Sensor Side Left",
+    0xB1022: "Crash Sensor Side Right",
+
+    # === O2 Sensors (Post-Cat) ===
+    0x0136: "O2 Sensor Circuit Malfunction (Bank 1 Sensor 2)",
+    0x0137: "O2 Sensor Low Voltage (Bank 1 Sensor 2)",
+    0x0138: "O2 Sensor High Voltage (Bank 1 Sensor 2)",
+    0x0140: "O2 Sensor No Activity (Bank 1 Sensor 2)",
+    0x0156: "O2 Sensor Circuit Malfunction (Bank 2 Sensor 2)",
+    0x0157: "O2 Sensor Low Voltage (Bank 2 Sensor 2)",
+    0x0158: "O2 Sensor High Voltage (Bank 2 Sensor 2)",
+    0x0160: "O2 Sensor No Activity (Bank 2 Sensor 2)",
+
+    # === O2 Heater Circuits ===
+    0x0030: "O2 Sensor Heater Circuit (Bank 1 Sensor 1)",
+    0x0031: "O2 Sensor Heater Low (Bank 1 Sensor 1)",
+    0x0032: "O2 Sensor Heater High (Bank 1 Sensor 1)",
+    0x0036: "O2 Sensor Heater Circuit (Bank 1 Sensor 2)",
+    0x0050: "O2 Sensor Heater Circuit (Bank 2 Sensor 1)",
+    0x0056: "O2 Sensor Heater Circuit (Bank 2 Sensor 2)",
+    0x30FF: "O2 Sensor Heater Control Circuit",
+}
+
+# Live Data PIDs (BMW ReadDataByIdentifier)
+# Format: {pid: (name, unit, scale_func)}
+# Scale functions convert raw bytes to display value
+LIVE_DATA_PIDS = {
+    # Engine data (from DME)
+    0x1001: ("Engine RPM", "RPM", lambda b: ((b[0] << 8) | b[1]) / 4),
+    0x1002: ("Coolant Temp", "°C", lambda b: b[0] - 40),
+    0x1003: ("Intake Air Temp", "°C", lambda b: b[0] - 40),
+    0x1004: ("Engine Load", "%", lambda b: b[0] * 100 / 255),
+    0x1005: ("Throttle Position", "%", lambda b: b[0] * 100 / 255),
+    0x1006: ("Vehicle Speed", "km/h", lambda b: b[0]),
+    0x1007: ("Ignition Timing", "°", lambda b: (b[0] - 128) / 2),
+    0x1008: ("MAF Sensor", "g/s", lambda b: ((b[0] << 8) | b[1]) / 100),
+    0x1009: ("Fuel Pressure", "kPa", lambda b: ((b[0] << 8) | b[1]) * 0.1),
+    0x100A: ("Oil Temp", "°C", lambda b: b[0] - 40),
+    0x100B: ("Oil Pressure", "bar", lambda b: b[0] * 0.1),
+    0x100C: ("Battery Voltage", "V", lambda b: ((b[0] << 8) | b[1]) * 0.001),
+
+    # Standard OBD-II PIDs (via functional request)
+    0xF40C: ("Engine RPM (OBD)", "RPM", lambda b: ((b[0] << 8) | b[1]) / 4),
+    0xF405: ("Coolant Temp (OBD)", "°C", lambda b: b[0] - 40),
+    0xF40F: ("Intake Air Temp (OBD)", "°C", lambda b: b[0] - 40),
+    0xF404: ("Engine Load (OBD)", "%", lambda b: b[0] * 100 / 255),
+    0xF411: ("Throttle Position (OBD)", "%", lambda b: b[0] * 100 / 255),
+    0xF40D: ("Vehicle Speed (OBD)", "km/h", lambda b: b[0]),
+}
+
+# ECU Identification DIDs (Data Identifiers)
+ECU_INFO_DIDS = {
+    0xF190: "VIN",
+    0xF191: "ECU Hardware Number",
+    0xF192: "ECU Software Number",
+    0xF193: "ECU Part Number",
+    0xF194: "ECU Serial Number",
+    0xF195: "ECU Hardware Version",
+    0xF187: "Supplier ECU Software Version",
+    0xF18C: "ECU Serial Number",
+    0xF1A0: "Bootloader Version",
 }
 
 
@@ -369,6 +558,10 @@ class CANWorker(QThread):
                 results = self._battery_registration(bus)
             elif self.operation == "service_reset":
                 results = self._service_reset(bus, self.params.get("cbs_type"))
+            elif self.operation == "read_live_data":
+                results = self._read_live_data(bus, self.params.get("ecu_name", "DME"))
+            elif self.operation == "read_ecu_info":
+                results = self._read_ecu_info(bus, self.params.get("ecu_name"))
             else:
                 results = {"error": "Unknown operation"}
 
@@ -721,6 +914,86 @@ class CANWorker(QThread):
 
         return {"success": False, "service": service_name, "error": "No response"}
 
+    def _read_live_data(self, bus, ecu_name="DME"):
+        """Read live data from ECU."""
+        if ecu_name not in BMW_ECUS:
+            return {"error": f"Unknown ECU: {ecu_name}"}
+
+        tx_id, rx_id, desc, ecu_timeout = BMW_ECUS[ecu_name]
+        self.progress.emit(f"Reading live data from {ecu_name}...", 10)
+
+        # Enter extended session
+        self._enter_session(bus, tx_id, rx_id, SESSION_EXTENDED)
+
+        data = {}
+        isotp = IsoTpHandler(bus, tx_id, rx_id)
+        total = len(LIVE_DATA_PIDS)
+
+        for i, (pid, (name, unit, scale_func)) in enumerate(LIVE_DATA_PIDS.items()):
+            percent = int(((i + 1) / total) * 100)
+            self.progress.emit(f"Reading {name}...", percent)
+
+            # ReadDataByIdentifier (0x22)
+            response = isotp.send_receive([
+                UDS_READ_DATA_BY_ID,
+                (pid >> 8) & 0xFF,
+                pid & 0xFF
+            ], timeout=0.5)
+
+            if response and len(response) >= 4 and response[0] == UDS_READ_DATA_BY_ID + 0x40:
+                # Response: 62 [PID_HI] [PID_LO] [DATA...]
+                try:
+                    raw_data = response[3:]
+                    if raw_data:
+                        value = scale_func(raw_data)
+                        data[name] = {"value": value, "unit": unit, "raw": raw_data}
+                except Exception:
+                    pass
+
+        self.progress.emit("Complete", 100)
+        return {"data": data, "ecu": ecu_name}
+
+    def _read_ecu_info(self, bus, ecu_name):
+        """Read ECU identification information."""
+        if ecu_name not in BMW_ECUS:
+            return {"error": f"Unknown ECU: {ecu_name}"}
+
+        tx_id, rx_id, desc, ecu_timeout = BMW_ECUS[ecu_name]
+        self.progress.emit(f"Reading {ecu_name} info...", 10)
+
+        # Enter extended session
+        self._enter_session(bus, tx_id, rx_id, SESSION_EXTENDED)
+
+        info = {"ecu": ecu_name, "description": desc}
+        isotp = IsoTpHandler(bus, tx_id, rx_id)
+        total = len(ECU_INFO_DIDS)
+
+        for i, (did, did_name) in enumerate(ECU_INFO_DIDS.items()):
+            percent = int(((i + 1) / total) * 100)
+            self.progress.emit(f"Reading {did_name}...", percent)
+
+            # ReadDataByIdentifier (0x22)
+            response = isotp.send_receive([
+                UDS_READ_DATA_BY_ID,
+                (did >> 8) & 0xFF,
+                did & 0xFF
+            ], timeout=ecu_timeout)
+
+            if response and len(response) >= 4 and response[0] == UDS_READ_DATA_BY_ID + 0x40:
+                # Response: 62 [DID_HI] [DID_LO] [DATA...]
+                raw_data = response[3:]
+                # Try to decode as ASCII string
+                try:
+                    value = ''.join(chr(b) for b in raw_data if 32 <= b <= 126).strip()
+                    if value:
+                        info[did_name] = value
+                except Exception:
+                    # If not a string, show as hex
+                    info[did_name] = ' '.join(f'{b:02X}' for b in raw_data)
+
+        self.progress.emit("Complete", 100)
+        return info
+
 
 class MainWindow(QMainWindow):
     """Main application window."""
@@ -787,6 +1060,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self._create_scan_tab(), "Scan ECUs")
         tabs.addTab(self._create_dtc_tab(), "Fault Codes")
+        tabs.addTab(self._create_live_data_tab(), "Live Data")
         tabs.addTab(self._create_reset_tab(), "Reset / Service")
         tabs.addTab(self._create_log_tab(), "Log")
 
@@ -923,6 +1197,72 @@ class MainWindow(QMainWindow):
         self.dtc_table.setColumnWidth(1, 100)
         self.dtc_table.setColumnWidth(2, 80)
         layout.addWidget(self.dtc_table)
+
+        return tab
+
+    def _create_live_data_tab(self):
+        """Create Live Data tab with ECU info and real-time sensor data."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        # ECU Info section
+        info_group = QGroupBox("ECU Information")
+        info_layout = QVBoxLayout(info_group)
+
+        ecu_row = QHBoxLayout()
+        ecu_row.addWidget(QLabel("ECU:"))
+        self.info_ecu_combo = QComboBox()
+        for name, (tx, rx, desc, _) in BMW_ECUS.items():
+            self.info_ecu_combo.addItem(f"{name} - {desc}", name)
+        self.info_ecu_combo.setMinimumWidth(300)
+        ecu_row.addWidget(self.info_ecu_combo)
+
+        self.read_info_btn = QPushButton("Read ECU Info")
+        self.read_info_btn.clicked.connect(self.read_ecu_info)
+        self.read_info_btn.setEnabled(False)
+        ecu_row.addWidget(self.read_info_btn)
+
+        ecu_row.addStretch()
+        info_layout.addLayout(ecu_row)
+
+        self.ecu_info_table = QTableWidget()
+        self.ecu_info_table.setColumnCount(2)
+        self.ecu_info_table.setHorizontalHeaderLabels(["Property", "Value"])
+        self.ecu_info_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.ecu_info_table.setColumnWidth(0, 180)
+        self.ecu_info_table.setMaximumHeight(200)
+        info_layout.addWidget(self.ecu_info_table)
+
+        layout.addWidget(info_group)
+
+        # Live Data section
+        live_group = QGroupBox("Live Sensor Data")
+        live_layout = QVBoxLayout(live_group)
+
+        live_btn_row = QHBoxLayout()
+        self.read_live_btn = QPushButton("Read Live Data")
+        self.read_live_btn.clicked.connect(self.read_live_data)
+        self.read_live_btn.setEnabled(False)
+        live_btn_row.addWidget(self.read_live_btn)
+
+        live_btn_row.addStretch()
+        live_layout.addLayout(live_btn_row)
+
+        self.live_progress = QProgressBar()
+        self.live_progress.setMinimumHeight(20)
+        self.live_progress.setRange(0, 100)
+        self.live_progress.hide()
+        live_layout.addWidget(self.live_progress)
+
+        self.live_data_table = QTableWidget()
+        self.live_data_table.setColumnCount(3)
+        self.live_data_table.setHorizontalHeaderLabels(["Parameter", "Value", "Unit"])
+        self.live_data_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.live_data_table.setColumnWidth(1, 120)
+        self.live_data_table.setColumnWidth(2, 80)
+        live_layout.addWidget(self.live_data_table)
+
+        layout.addWidget(live_group)
 
         return tab
 
@@ -1109,6 +1449,8 @@ class MainWindow(QMainWindow):
         self.reset_ecu_btn.setEnabled(enabled)
         self.battery_btn.setEnabled(enabled)
         self.service_btn.setEnabled(enabled)
+        self.read_info_btn.setEnabled(enabled)
+        self.read_live_btn.setEnabled(enabled)
 
     def _update_ecu_table(self, ecus):
         self.ecu_table.setRowCount(0)
@@ -1358,6 +1700,79 @@ class MainWindow(QMainWindow):
             error = results.get("error", "Unknown error")
             self.reset_output.append(f"✗ Reset failed: {error}")
             self.log(f"Service reset failed: {error}")
+
+    def read_ecu_info(self):
+        """Read ECU identification information."""
+        ecu_name = self.info_ecu_combo.currentData()
+        self.read_info_btn.setEnabled(False)
+        self.ecu_info_table.setRowCount(0)
+        self.live_progress.show()
+        self.log(f"Reading {ecu_name} information...")
+
+        self.worker = CANWorker("read_ecu_info", self.interface, {"ecu_name": ecu_name})
+        self.worker.progress.connect(self._on_live_progress)
+        self.worker.finished.connect(self._on_ecu_info_complete)
+        self.worker.start()
+
+    def _on_ecu_info_complete(self, results):
+        """Handle ECU info read completion."""
+        self.live_progress.hide()
+        self.read_info_btn.setEnabled(True)
+
+        if "error" in results:
+            self.log(f"Error: {results['error']}")
+            return
+
+        self.ecu_info_table.setRowCount(0)
+        for key, value in results.items():
+            if key not in ("ecu", "description"):
+                row = self.ecu_info_table.rowCount()
+                self.ecu_info_table.insertRow(row)
+                self.ecu_info_table.setItem(row, 0, QTableWidgetItem(key))
+                self.ecu_info_table.setItem(row, 1, QTableWidgetItem(str(value)))
+
+        self.log(f"ECU info read complete: {results.get('ecu')}")
+
+    def read_live_data(self):
+        """Read live sensor data from DME."""
+        self.read_live_btn.setEnabled(False)
+        self.live_data_table.setRowCount(0)
+        self.live_progress.show()
+        self.log("Reading live data from DME...")
+
+        self.worker = CANWorker("read_live_data", self.interface, {"ecu_name": "DME"})
+        self.worker.progress.connect(self._on_live_progress)
+        self.worker.finished.connect(self._on_live_data_complete)
+        self.worker.start()
+
+    def _on_live_progress(self, msg, percent):
+        """Handle live data progress updates."""
+        self.log(f"  {msg}")
+        self.live_progress.setValue(percent)
+
+    def _on_live_data_complete(self, results):
+        """Handle live data read completion."""
+        self.live_progress.hide()
+        self.read_live_btn.setEnabled(True)
+
+        if "error" in results:
+            self.log(f"Error: {results['error']}")
+            return
+
+        data = results.get("data", {})
+        self.live_data_table.setRowCount(0)
+
+        for name, info in data.items():
+            row = self.live_data_table.rowCount()
+            self.live_data_table.insertRow(row)
+            self.live_data_table.setItem(row, 0, QTableWidgetItem(name))
+            value = info.get("value", "N/A")
+            if isinstance(value, float):
+                value = f"{value:.1f}"
+            self.live_data_table.setItem(row, 1, QTableWidgetItem(str(value)))
+            self.live_data_table.setItem(row, 2, QTableWidgetItem(info.get("unit", "")))
+
+        self.log(f"Live data read complete: {len(data)} parameters")
 
 
 def main():
