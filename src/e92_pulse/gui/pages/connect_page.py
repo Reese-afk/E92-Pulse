@@ -104,7 +104,7 @@ class ConnectPage(QWidget):
 
         # USB Adapter detection status
         self._adapter_status = QLabel("Checking for USB CAN adapters...")
-        self._adapter_status.setStyleSheet("color: #888888; font-size: 11px;")
+        self._adapter_status.setStyleSheet("color: #888888; font-size: 11px; background: transparent;")
         self._adapter_status.setWordWrap(True)
         iface_layout.addWidget(self._adapter_status)
 
