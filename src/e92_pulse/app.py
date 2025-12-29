@@ -6,6 +6,9 @@ import sys
 import subprocess
 import struct
 import time
+import os
+from datetime import datetime
+from pathlib import Path
 
 import can
 
@@ -13,7 +16,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QMessageBox, QProgressBar,
     QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget, QFrame,
-    QComboBox, QGroupBox
+    QComboBox, QGroupBox, QFileDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal, QMutex
 from PyQt6.QtGui import QFont, QColor
@@ -324,6 +327,79 @@ ECU_INFO_DIDS = {
     0xF18C: "ECU Serial Number",
     0xF1A0: "Bootloader Version",
 }
+
+
+class SessionLogger:
+    """
+    Logs all diagnostic session activity to file.
+    Creates timestamped log files in the logs directory.
+    """
+
+    def __init__(self, log_dir=None):
+        """Initialize session logger."""
+        if log_dir is None:
+            # Default to ~/.e92pulse/logs
+            log_dir = Path.home() / ".e92pulse" / "logs"
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create session log file
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.log_file = self.log_dir / f"session_{timestamp}.log"
+        self.file_handle = None
+        self._start_session()
+
+    def _start_session(self):
+        """Start a new logging session."""
+        self.file_handle = open(self.log_file, 'w')
+        self._write_header()
+
+    def _write_header(self):
+        """Write session header."""
+        self.file_handle.write("=" * 60 + "\n")
+        self.file_handle.write("E92 Pulse - Diagnostic Session Log\n")
+        self.file_handle.write(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        self.file_handle.write("=" * 60 + "\n\n")
+        self.file_handle.flush()
+
+    def log(self, message, level="INFO"):
+        """Log a message with timestamp."""
+        if self.file_handle:
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            self.file_handle.write(f"[{timestamp}] [{level}] {message}\n")
+            self.file_handle.flush()
+
+    def log_can_frame(self, direction, can_id, data):
+        """Log a CAN frame."""
+        data_hex = ' '.join(f'{b:02X}' for b in data)
+        self.log(f"{direction} ID=0x{can_id:03X} DATA=[{data_hex}]", "CAN")
+
+    def log_operation(self, operation, ecu=None, result=None):
+        """Log a diagnostic operation."""
+        msg = f"Operation: {operation}"
+        if ecu:
+            msg += f" ECU={ecu}"
+        if result:
+            msg += f" Result={result}"
+        self.log(msg, "OP")
+
+    def log_dtc(self, ecu, code, description, active):
+        """Log a DTC reading."""
+        status = "ACTIVE" if active else "STORED"
+        self.log(f"DTC: {ecu} {code} [{status}] {description}", "DTC")
+
+    def close(self):
+        """Close the session log."""
+        if self.file_handle:
+            self.file_handle.write("\n" + "=" * 60 + "\n")
+            self.file_handle.write(f"Session ended: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            self.file_handle.write("=" * 60 + "\n")
+            self.file_handle.close()
+            self.file_handle = None
+
+    def get_log_path(self):
+        """Get the current log file path."""
+        return str(self.log_file)
 
 
 def detect_usb_adapters():
@@ -1009,6 +1085,9 @@ class MainWindow(QMainWindow):
         self.vehicle_vin = None
         self.found_ecus = {}
 
+        # Initialize session logger
+        self.session_logger = SessionLogger()
+
         self._setup_ui()
         self._apply_style()
 
@@ -1365,14 +1444,66 @@ class MainWindow(QMainWindow):
         self.log_output.setReadOnly(True)
         layout.addWidget(self.log_output)
 
-        clear_btn = QPushButton("Clear Log")
+        # Log info label
+        if self.session_logger:
+            log_info = QLabel(f"Session log: {self.session_logger.get_log_path()}")
+            log_info.setStyleSheet("color: #888; font-size: 10px;")
+            log_info.setWordWrap(True)
+            layout.addWidget(log_info)
+
+        btn_layout = QHBoxLayout()
+
+        clear_btn = QPushButton("Clear Display")
         clear_btn.clicked.connect(lambda: self.log_output.clear())
-        layout.addWidget(clear_btn)
+        btn_layout.addWidget(clear_btn)
+
+        save_btn = QPushButton("Save Log As...")
+        save_btn.clicked.connect(self.save_log)
+        btn_layout.addWidget(save_btn)
+
+        open_folder_btn = QPushButton("Open Log Folder")
+        open_folder_btn.clicked.connect(self.open_log_folder)
+        btn_layout.addWidget(open_folder_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
 
         return tab
 
+    def save_log(self):
+        """Save the current log to a file."""
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Save Log", f"e92pulse_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
+            "Text Files (*.txt);;All Files (*)"
+        )
+        if filename:
+            try:
+                with open(filename, 'w') as f:
+                    f.write(self.log_output.toPlainText())
+                self.log(f"Log saved to: {filename}")
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Could not save log: {e}")
+
+    def open_log_folder(self):
+        """Open the log folder in file manager."""
+        if self.session_logger:
+            log_dir = str(self.session_logger.log_dir)
+            try:
+                subprocess.Popen(['xdg-open', log_dir])
+            except Exception:
+                QMessageBox.information(self, "Log Folder", f"Log folder: {log_dir}")
+
     def log(self, msg):
+        """Log message to both UI and session file."""
         self.log_output.append(msg)
+        if self.session_logger:
+            self.session_logger.log(msg)
+
+    def closeEvent(self, event):
+        """Handle window close - cleanup session logger."""
+        if self.session_logger:
+            self.session_logger.close()
+        event.accept()
 
     def detect_adapter(self):
         self.log("Detecting USB CAN adapters...")
