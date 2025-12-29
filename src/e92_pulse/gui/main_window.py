@@ -1,732 +1,503 @@
 """
-Main Application Window
-
-Provides the main window with navigation sidebar and content area.
-ISTA-style guided workflow interface.
+E92 Pulse - BMW E92 M3 Diagnostic Tool
+Simple, clean main window.
 """
 
-from pathlib import Path
-from typing import Any
-
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QStackedWidget,
-    QPushButton,
-    QLabel,
-    QFrame,
-    QMessageBox,
-    QStatusBar,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QPushButton, QStackedWidget, QFrame,
+    QTableWidget, QTableWidgetItem, QHeaderView,
+    QMessageBox, QProgressBar
 )
-from PyQt6.QtGui import QFont, QAction
+from PyQt6.QtGui import QFont, QColor
 
-from e92_pulse.core.config import AppConfig, save_config
 from e92_pulse.core.connection import ConnectionManager, ConnectionState
-from e92_pulse.core.vehicle import VehicleProfile
+from e92_pulse.core.config import AppConfig
 from e92_pulse.core.safety import SafetyManager
-from e92_pulse.core.app_logging import get_logger, get_session_id, get_log_dir
-from e92_pulse.bmw.module_registry import ModuleRegistry
-from e92_pulse.protocols.uds_client import UDSClient
-from e92_pulse.bmw.module_scan import ModuleScanner
-from e92_pulse.bmw.services import ServiceManager
+from e92_pulse.core.vehicle import VehicleProfile
+from e92_pulse.core.modules import ModuleRegistry
+from e92_pulse.core.app_logging import get_logger
 
 logger = get_logger(__name__)
 
 
-class NavigationButton(QPushButton):
-    """Styled navigation button for sidebar."""
-
-    def __init__(self, text: str, icon_char: str = "", parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setText(f"  {icon_char}  {text}" if icon_char else f"  {text}")
-        self.setCheckable(True)
-        self.setMinimumHeight(50)
-        self.setFont(QFont("Sans", 11))
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        self.setStyleSheet("""
-            QPushButton {
-                text-align: left;
-                padding-left: 10px;
-                border: none;
-                border-radius: 5px;
-                background-color: transparent;
-                color: #e0e0e0;
-            }
-            QPushButton:hover {
-                background-color: #3a3a3a;
-            }
-            QPushButton:checked {
-                background-color: #0066cc;
-                color: white;
-            }
-            QPushButton:disabled {
-                color: #666666;
-            }
-        """)
-
-
-class StatusIndicator(QFrame):
-    """Connection status indicator widget."""
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setFixedHeight(80)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 5, 10, 5)
-        layout.setSpacing(2)
-
-        # Adapter status
-        self._adapter_label = QLabel("No CAN adapter")
-        self._adapter_label.setFont(QFont("Sans", 9))
-        self._adapter_label.setStyleSheet("color: #888888;")
-
-        # Connection status
-        self._status_label = QLabel("Disconnected")
-        self._status_label.setFont(QFont("Sans", 10, QFont.Weight.Bold))
-
-        self._detail_label = QLabel("No connection")
-        self._detail_label.setFont(QFont("Sans", 9))
-        self._detail_label.setStyleSheet("color: #888888;")
-
-        layout.addWidget(self._adapter_label)
-        layout.addWidget(self._status_label)
-        layout.addWidget(self._detail_label)
-
-        self.set_disconnected()
-
-    def set_adapter_detected(self, count: int, names: list[str]) -> None:
-        """Set adapter detection status."""
-        if count == 0:
-            self._adapter_label.setText("No CAN adapter")
-            self._adapter_label.setStyleSheet("color: #cc6600;")
-        else:
-            iface_list = ", ".join(names[:2])
-            if count > 2:
-                iface_list += f" (+{count - 2})"
-            self._adapter_label.setText(f"CAN: {iface_list}")
-            self._adapter_label.setStyleSheet("color: #00cc00;")
-
-    def set_connected(self, interface: str) -> None:
-        """Set connected state."""
-        self._status_label.setText("Connected")
-        self._status_label.setStyleSheet("color: #00cc00;")
-        self._detail_label.setText(interface)
-
-    def set_disconnected(self) -> None:
-        """Set disconnected state."""
-        self._status_label.setText("Disconnected")
-        self._status_label.setStyleSheet("color: #cc0000;")
-        self._detail_label.setText("No connection")
-
-    def set_connecting(self) -> None:
-        """Set connecting state."""
-        self._status_label.setText("Connecting...")
-        self._status_label.setStyleSheet("color: #cccc00;")
-        self._detail_label.setText("")
-
-
-class VehicleInfoPanel(QFrame):
-    """Panel showing connected vehicle information."""
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #1a3a1a;
-                border: 1px solid #2a5a2a;
-                border-radius: 5px;
-            }
-        """)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(4)
-
-        title = QLabel("Vehicle")
-        title.setFont(QFont("Sans", 9, QFont.Weight.Bold))
-        title.setStyleSheet("color: #00cc00;")
-        layout.addWidget(title)
-
-        self._vin_label = QLabel("VIN: ---")
-        self._vin_label.setFont(QFont("Monospace", 8))
-        self._vin_label.setStyleSheet("color: #cccccc;")
-        layout.addWidget(self._vin_label)
-
-        self._series_label = QLabel("Series: ---")
-        self._series_label.setFont(QFont("Sans", 8))
-        self._series_label.setStyleSheet("color: #aaaaaa;")
-        layout.addWidget(self._series_label)
-
-        self._engine_label = QLabel("Engine: ---")
-        self._engine_label.setFont(QFont("Sans", 8))
-        self._engine_label.setStyleSheet("color: #aaaaaa;")
-        layout.addWidget(self._engine_label)
-
-        self.hide()  # Hidden until connected
-
-    def update_info(self, vin: str | None, series: str, engine: str) -> None:
-        """Update vehicle information."""
-        if vin:
-            # Show partial VIN for privacy
-            display_vin = vin[:7] + "..." + vin[-4:] if len(vin) >= 11 else vin
-            self._vin_label.setText(f"VIN: {display_vin}")
-        else:
-            self._vin_label.setText("VIN: Reading...")
-
-        self._series_label.setText(f"Series: {series}")
-        self._engine_label.setText(f"Engine: {engine}")
-        self.show()
-
-    def clear_info(self) -> None:
-        """Clear vehicle information."""
-        self._vin_label.setText("VIN: ---")
-        self._series_label.setText("Series: ---")
-        self._engine_label.setText("Engine: ---")
-        self.hide()
-
-
 class MainWindow(QMainWindow):
-    """
-    Main application window.
+    """Main application window."""
 
-    Provides ISTA-style navigation with:
-    - Connect page
-    - Quick Test (module scan)
-    - Fault Memory (DTC management)
-    - Service Functions
-    - Export Session
-    """
-
-    connection_changed = pyqtSignal(bool)
-
-    def __init__(self, config: AppConfig, parent: QWidget | None = None):
-        super().__init__(parent)
-
+    def __init__(self, config: AppConfig):
+        super().__init__()
         self._config = config
-        self._setup_core_components()
-        self._setup_ui()
-        self._setup_menu()
-        self._connect_signals()
 
-        # Apply window geometry from config
-        geom = config.ui.window_geometry
-        self.setGeometry(geom["x"], geom["y"], geom["width"], geom["height"])
-
-        # Scan for CAN adapters on startup
-        QTimer.singleShot(100, self._refresh_adapter_status)
-
-        logger.info("Main window initialized")
-
-    def _setup_core_components(self) -> None:
-        """Initialize core application components."""
+        # Core components
         self._safety_manager = SafetyManager()
         self._vehicle_profile = VehicleProfile()
-        self._connection_manager = ConnectionManager(self._config)
-        self._module_registry = ModuleRegistry(self._config.datapacks_dir)
+        self._connection_manager = ConnectionManager(config)
+        self._module_registry = ModuleRegistry(config.datapacks_dir)
 
-        # UDS client and services will be created after connection
-        self._uds_client: UDSClient | None = None
-        self._module_scanner: ModuleScanner | None = None
-        self._service_manager: ServiceManager | None = None
+        self._uds_client = None
+        self._module_scanner = None
 
-    def _setup_ui(self) -> None:
-        """Set up the user interface."""
-        self.setWindowTitle("E92 Pulse - BMW E92 M3 Diagnostic Tool")
+        self.setWindowTitle("E92 Pulse - BMW Diagnostics")
         self.setMinimumSize(1000, 700)
 
-        # Apply dark theme
-        self._apply_dark_theme()
+        self._setup_ui()
+        self._apply_style()
 
-        # Central widget
-        central = QWidget()
-        self.setCentralWidget(central)
+        # Auto-scan for interface
+        QTimer.singleShot(500, self._scan_interface)
 
-        main_layout = QHBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-
-        # Sidebar
-        sidebar = self._create_sidebar()
-        main_layout.addWidget(sidebar)
-
-        # Content area
-        self._content_stack = QStackedWidget()
-        main_layout.addWidget(self._content_stack, 1)
-
-        # Create pages
-        self._create_pages()
-
-        # Status bar
-        self._setup_status_bar()
-
-    def _apply_dark_theme(self) -> None:
-        """Apply dark theme stylesheet."""
+    def _apply_style(self):
+        """Apply dark theme."""
         self.setStyleSheet("""
-            QMainWindow {
-                background-color: #1e1e1e;
-            }
-            QWidget {
-                color: #e0e0e0;
-                font-family: 'Segoe UI', 'Ubuntu', sans-serif;
-            }
-            QLabel {
-                color: #e0e0e0;
+            QMainWindow, QWidget {
+                background-color: #1a1a1a;
+                color: #ffffff;
             }
             QPushButton {
                 background-color: #0066cc;
                 color: white;
                 border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
+                padding: 10px 20px;
+                font-size: 14px;
+                border-radius: 5px;
             }
             QPushButton:hover {
                 background-color: #0077ee;
-            }
-            QPushButton:pressed {
-                background-color: #0055aa;
             }
             QPushButton:disabled {
                 background-color: #444444;
                 color: #888888;
             }
-            QComboBox {
-                background-color: #2d2d2d;
-                border: 1px solid #444444;
-                border-radius: 4px;
-                padding: 5px;
-                min-height: 25px;
-                selection-background-color: #3d3d3d;
+            QPushButton#danger {
+                background-color: #cc3333;
             }
-            QComboBox:hover {
-                border-color: #0066cc;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: right center;
-                width: 20px;
-                border: none;
-                background: transparent;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #2d2d2d;
-                border: 1px solid #444444;
-                selection-background-color: #3d3d3d;
-                outline: none;
-            }
-            QLineEdit {
-                background-color: #2d2d2d;
-                border: 1px solid #444444;
-                border-radius: 4px;
-                padding: 5px;
-            }
-            QLineEdit:focus {
-                border-color: #0066cc;
+            QPushButton#danger:hover {
+                background-color: #ee4444;
             }
             QTableWidget {
-                background-color: #2d2d2d;
+                background-color: #2a2a2a;
                 border: 1px solid #444444;
                 gridline-color: #444444;
             }
             QTableWidget::item {
-                padding: 5px;
-            }
-            QTableWidget::item:selected {
-                background-color: #0066cc;
+                padding: 8px;
             }
             QHeaderView::section {
-                background-color: #3d3d3d;
-                padding: 5px;
+                background-color: #333333;
+                padding: 8px;
                 border: none;
-                border-bottom: 1px solid #444444;
-            }
-            QScrollBar:vertical {
-                background-color: #2d2d2d;
-                width: 12px;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #555555;
-                border-radius: 6px;
-                min-height: 30px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #666666;
             }
             QProgressBar {
-                background-color: #2d2d2d;
-                border: 1px solid #444444;
-                border-radius: 4px;
+                background-color: #333333;
+                border: none;
+                border-radius: 5px;
                 text-align: center;
             }
             QProgressBar::chunk {
                 background-color: #0066cc;
-                border-radius: 3px;
-            }
-            QCheckBox {
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border-radius: 3px;
-                border: 1px solid #444444;
-                background-color: #2d2d2d;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #0066cc;
-                border-color: #0066cc;
-            }
-            QGroupBox {
-                background-color: transparent;
-                border: 1px solid #444444;
                 border-radius: 5px;
-                margin-top: 10px;
-                padding-top: 10px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 5px;
-                background-color: transparent;
             }
         """)
 
-    def _create_sidebar(self) -> QFrame:
-        """Create the navigation sidebar."""
+    def _setup_ui(self):
+        """Setup the UI."""
+        central = QWidget()
+        self.setCentralWidget(central)
+
+        layout = QHBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Sidebar
+        sidebar = self._create_sidebar()
+        layout.addWidget(sidebar)
+
+        # Main content
+        self._content = QStackedWidget()
+        layout.addWidget(self._content, 1)
+
+        # Create pages
+        self._create_connect_page()
+        self._create_scan_page()
+        self._create_reset_page()
+
+    def _create_sidebar(self):
+        """Create navigation sidebar."""
         sidebar = QFrame()
-        sidebar.setFixedWidth(220)
-        sidebar.setStyleSheet("""
-            QFrame {
-                background-color: #252526;
-                border-right: 1px solid #3c3c3c;
-            }
-        """)
+        sidebar.setFixedWidth(200)
+        sidebar.setStyleSheet("background-color: #252525; border-right: 1px solid #333;")
 
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(5)
+        layout.setContentsMargins(10, 20, 10, 20)
+        layout.setSpacing(10)
 
-        # Logo/Title
+        # Title
         title = QLabel("E92 Pulse")
-        title.setFont(QFont("Sans", 16, QFont.Weight.Bold))
-        title.setStyleSheet("color: #0099ff; padding: 10px;")
+        title.setFont(QFont("Sans", 18, QFont.Weight.Bold))
+        title.setStyleSheet("color: #00aaff;")
         layout.addWidget(title)
 
-        subtitle = QLabel("BMW E92 M3 Diagnostics")
-        subtitle.setFont(QFont("Sans", 9))
-        subtitle.setStyleSheet("color: #888888; padding-left: 10px;")
+        subtitle = QLabel("BMW E92 M3")
+        subtitle.setStyleSheet("color: #888888;")
         layout.addWidget(subtitle)
 
-        layout.addSpacing(20)
+        layout.addSpacing(30)
 
-        # Navigation buttons
-        self._nav_buttons: dict[str, NavigationButton] = {}
+        # Nav buttons
+        self._nav_buttons = {}
 
-        nav_items = [
-            ("connect", "Connect", ""),
-            ("quick_test", "Quick Test", ""),
-            ("fault_memory", "Fault Memory", ""),
-            ("services", "Service Functions", ""),
-            ("export", "Export Session", ""),
+        pages = [
+            ("connect", "Connect"),
+            ("scan", "Scan Modules"),
+            ("reset", "Reset ECUs"),
         ]
 
-        for key, text, icon in nav_items:
-            btn = NavigationButton(text, icon)
-            btn.clicked.connect(lambda checked, k=key: self._navigate_to(k))
-            self._nav_buttons[key] = btn
+        for key, label in pages:
+            btn = QPushButton(label)
+            btn.setMinimumHeight(45)
+            btn.clicked.connect(lambda checked, k=key: self._show_page(k))
             layout.addWidget(btn)
+            self._nav_buttons[key] = btn
 
-            # Disable pages until connected (except connect page)
             if key != "connect":
                 btn.setEnabled(False)
 
         layout.addStretch()
 
-        # Vehicle info panel (hidden until connected)
-        self._vehicle_info_panel = VehicleInfoPanel()
-        layout.addWidget(self._vehicle_info_panel)
-
-        # Status indicator
-        self._status_indicator = StatusIndicator()
-        layout.addWidget(self._status_indicator)
+        # Status
+        self._status_label = QLabel("Not Connected")
+        self._status_label.setStyleSheet("color: #cc0000;")
+        layout.addWidget(self._status_label)
 
         return sidebar
 
-    def _create_pages(self) -> None:
-        """Create content pages."""
-        from e92_pulse.gui.pages.connect_page import ConnectPage
-        from e92_pulse.gui.pages.quick_test_page import QuickTestPage
-        from e92_pulse.gui.pages.fault_memory_page import FaultMemoryPage
-        from e92_pulse.gui.pages.services_page import ServicesPage
-        from e92_pulse.gui.pages.export_page import ExportPage
+    def _create_connect_page(self):
+        """Create connect page."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(20)
 
-        self._pages: dict[str, QWidget] = {}
+        title = QLabel("Connect to Vehicle")
+        title.setFont(QFont("Sans", 24, QFont.Weight.Bold))
+        layout.addWidget(title)
 
-        # Connect page
-        connect_page = ConnectPage(
-            self._connection_manager, self._config, self
+        self._iface_label = QLabel("Scanning...")
+        self._iface_label.setFont(QFont("Sans", 16))
+        layout.addWidget(self._iface_label)
+
+        btn_layout = QHBoxLayout()
+
+        self._connect_btn = QPushButton("Connect")
+        self._connect_btn.setMinimumHeight(50)
+        self._connect_btn.setMinimumWidth(150)
+        self._connect_btn.clicked.connect(self._connect)
+        self._connect_btn.setEnabled(False)
+        btn_layout.addWidget(self._connect_btn)
+
+        self._disconnect_btn = QPushButton("Disconnect")
+        self._disconnect_btn.setObjectName("danger")
+        self._disconnect_btn.setMinimumHeight(50)
+        self._disconnect_btn.setMinimumWidth(150)
+        self._disconnect_btn.clicked.connect(self._disconnect)
+        self._disconnect_btn.setEnabled(False)
+        btn_layout.addWidget(self._disconnect_btn)
+
+        rescan_btn = QPushButton("Rescan")
+        rescan_btn.setMinimumHeight(50)
+        rescan_btn.clicked.connect(self._scan_interface)
+        btn_layout.addWidget(rescan_btn)
+
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        # Instructions
+        instructions = QLabel(
+            "1. Connect Innomaker USB2CAN to laptop\n"
+            "2. Connect DB9 cable to car OBD port\n"
+            "3. Turn ignition ON\n"
+            "4. Run: sudo ip link set can0 up type can bitrate 500000\n"
+            "5. Click Connect"
         )
-        connect_page.connection_established.connect(self._on_connected)
-        connect_page.connection_closed.connect(self._on_disconnected)
-        self._pages["connect"] = connect_page
-        self._content_stack.addWidget(connect_page)
+        instructions.setStyleSheet("color: #888888; font-family: monospace;")
+        layout.addWidget(instructions)
 
-        # Quick Test page
-        quick_test = QuickTestPage(
-            self._module_scanner,
-            self._module_registry,
-            self._vehicle_profile,
-            self,
-        )
-        self._pages["quick_test"] = quick_test
-        self._content_stack.addWidget(quick_test)
+        layout.addStretch()
 
-        # Fault Memory page
-        fault_memory = FaultMemoryPage(
-            self._uds_client,
-            self._vehicle_profile,
-            self._module_registry,
-            self._safety_manager,
-            self,
-        )
-        self._pages["fault_memory"] = fault_memory
-        self._content_stack.addWidget(fault_memory)
+        self._content.addWidget(page)
 
-        # Services page
-        services = ServicesPage(
-            self._service_manager,
-            self._vehicle_profile,
-            self,
-        )
-        self._pages["services"] = services
-        self._content_stack.addWidget(services)
+    def _create_scan_page(self):
+        """Create module scan page."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(20)
 
-        # Export page
-        export = ExportPage(
-            self._vehicle_profile,
-            self._config,
-            self,
-        )
-        self._pages["export"] = export
-        self._content_stack.addWidget(export)
+        title = QLabel("ECU Modules")
+        title.setFont(QFont("Sans", 24, QFont.Weight.Bold))
+        layout.addWidget(title)
 
-        # Set initial page
-        self._navigate_to("connect")
+        # Scan button
+        btn_layout = QHBoxLayout()
+        self._scan_btn = QPushButton("Scan All Modules")
+        self._scan_btn.setMinimumHeight(50)
+        self._scan_btn.clicked.connect(self._start_scan)
+        btn_layout.addWidget(self._scan_btn)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
 
-    def _setup_menu(self) -> None:
-        """Set up menu bar."""
-        menubar = self.menuBar()
-        menubar.setStyleSheet("""
-            QMenuBar {
-                background-color: #252526;
-                border-bottom: 1px solid #3c3c3c;
-            }
-            QMenuBar::item {
-                padding: 5px 10px;
-            }
-            QMenuBar::item:selected {
-                background-color: #3a3a3a;
-            }
-            QMenu {
-                background-color: #2d2d2d;
-                border: 1px solid #3c3c3c;
-            }
-            QMenu::item {
-                padding: 5px 20px;
-            }
-            QMenu::item:selected {
-                background-color: #0066cc;
-            }
-        """)
+        # Progress
+        self._scan_progress = QProgressBar()
+        self._scan_progress.setMinimumHeight(30)
+        self._scan_progress.hide()
+        layout.addWidget(self._scan_progress)
 
-        # File menu
-        file_menu = menubar.addMenu("&File")
+        # Results table
+        self._module_table = QTableWidget()
+        self._module_table.setColumnCount(4)
+        self._module_table.setHorizontalHeaderLabels(["Module", "Address", "Status", "Faults"])
+        self._module_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self._module_table.setMinimumHeight(400)
+        layout.addWidget(self._module_table)
 
-        export_action = QAction("&Export Session...", self)
-        export_action.triggered.connect(lambda: self._navigate_to("export"))
-        file_menu.addAction(export_action)
+        self._content.addWidget(page)
 
-        file_menu.addSeparator()
+    def _create_reset_page(self):
+        """Create reset page."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(40, 40, 40, 40)
+        layout.setSpacing(20)
 
-        exit_action = QAction("E&xit", self)
-        exit_action.triggered.connect(self.close)
-        file_menu.addAction(exit_action)
+        title = QLabel("Reset ECUs")
+        title.setFont(QFont("Sans", 24, QFont.Weight.Bold))
+        layout.addWidget(title)
 
-        # Help menu
-        help_menu = menubar.addMenu("&Help")
+        warning = QLabel("Warning: Only reset ECUs if you know what you're doing!")
+        warning.setStyleSheet("color: #ffaa00;")
+        layout.addWidget(warning)
 
-        about_action = QAction("&About E92 Pulse", self)
-        about_action.triggered.connect(self._show_about)
-        help_menu.addAction(about_action)
+        # Reset buttons
+        btn_layout = QVBoxLayout()
 
-    def _setup_status_bar(self) -> None:
-        """Set up status bar."""
-        self._statusbar = QStatusBar()
-        self._statusbar.setStyleSheet("""
-            QStatusBar {
-                background-color: #007acc;
-                color: white;
-            }
-        """)
-        self.setStatusBar(self._statusbar)
+        self._reset_all_btn = QPushButton("Reset All ECUs (Soft Reset)")
+        self._reset_all_btn.setObjectName("danger")
+        self._reset_all_btn.setMinimumHeight(50)
+        self._reset_all_btn.clicked.connect(self._reset_all_ecus)
+        btn_layout.addWidget(self._reset_all_btn)
 
-        session_label = QLabel(f"Session: {get_session_id()}")
-        self._statusbar.addPermanentWidget(session_label)
+        self._clear_dtc_btn = QPushButton("Clear All Fault Codes")
+        self._clear_dtc_btn.setMinimumHeight(50)
+        self._clear_dtc_btn.clicked.connect(self._clear_all_dtcs)
+        btn_layout.addWidget(self._clear_dtc_btn)
 
-    def _connect_signals(self) -> None:
-        """Connect signals between components."""
-        self._connection_manager.add_state_callback(self._on_connection_state_change)
+        layout.addLayout(btn_layout)
 
-    def _navigate_to(self, page_key: str) -> None:
-        """Navigate to a page."""
-        if page_key not in self._pages:
-            return
+        # Status
+        self._reset_status = QLabel("")
+        self._reset_status.setStyleSheet("color: #00cc00;")
+        layout.addWidget(self._reset_status)
 
-        # Update button states
-        for key, btn in self._nav_buttons.items():
-            btn.setChecked(key == page_key)
+        layout.addStretch()
 
-        # Switch page
-        self._content_stack.setCurrentWidget(self._pages[page_key])
+        self._content.addWidget(page)
 
-        logger.debug(f"Navigated to: {page_key}")
+    def _show_page(self, key):
+        """Show a page."""
+        pages = {"connect": 0, "scan": 1, "reset": 2}
+        if key in pages:
+            self._content.setCurrentIndex(pages[key])
 
-    def _on_connection_state_change(
-        self, old_state: ConnectionState, new_state: ConnectionState
-    ) -> None:
-        """Handle connection state changes."""
-        if new_state == ConnectionState.CONNECTED:
-            iface = self._connection_manager.current_interface
-            if iface:
-                self._status_indicator.set_connected(iface.name)
-            self._enable_pages(True)
-        elif new_state == ConnectionState.CONNECTING:
-            self._status_indicator.set_connecting()
-        elif new_state == ConnectionState.DISCONNECTED:
-            self._status_indicator.set_disconnected()
-            self._enable_pages(False)
-        elif new_state == ConnectionState.ERROR:
-            self._status_indicator.set_disconnected()
-
-    def _on_connected(self) -> None:
-        """Handle successful connection."""
-        self._enable_pages(True)
-
-        # Create UDS client with actual transport
-        transport = self._connection_manager.get_transport()
-        if transport:
-            self._uds_client = UDSClient(
-                transport, self._safety_manager, target_address=0x00
-            )
-            self._module_scanner = ModuleScanner(
-                self._uds_client, self._module_registry, self._vehicle_profile
-            )
-            self._service_manager = ServiceManager(
-                self._uds_client, self._safety_manager, self._vehicle_profile
-            )
-
-            # Update pages with new components
-            self._pages["quick_test"].set_scanner(self._module_scanner)
-            self._pages["fault_memory"].set_uds_client(self._uds_client)
-            self._pages["services"].set_service_manager(self._service_manager)
-
-            # Try to read VIN from vehicle
-            self._read_vehicle_info()
-
-        # Show vehicle info panel with current profile data
-        self._vehicle_info_panel.update_info(
-            self._vehicle_profile.vin,
-            self._vehicle_profile.series.value,
-            self._vehicle_profile.engine.value,
-        )
-
-        self.connection_changed.emit(True)
-        self._statusbar.showMessage("Connected to vehicle", 3000)
-
-    def _on_disconnected(self) -> None:
-        """Handle disconnection."""
-        self._enable_pages(False)
-        self._vehicle_info_panel.clear_info()
-        self.connection_changed.emit(False)
-        self._statusbar.showMessage("Disconnected", 3000)
-
-    def _read_vehicle_info(self) -> None:
-        """Read VIN and vehicle info from the connected vehicle."""
-        if not self._uds_client:
-            return
-
-        try:
-            # Read VIN from DME (engine ECU) using Read Data By Identifier
-            # VIN is typically at DID 0xF190 (standard UDS)
-            vin = self._uds_client.read_vin()
-            if vin:
-                self._vehicle_profile.vin = vin
-                logger.info(f"Read VIN from vehicle: {vin[:7]}...{vin[-4:]}")
-
-                # Update the vehicle info panel with the new VIN
-                self._vehicle_info_panel.update_info(
-                    self._vehicle_profile.vin,
-                    self._vehicle_profile.series.value,
-                    self._vehicle_profile.engine.value,
-                )
-        except Exception as e:
-            logger.warning(f"Failed to read VIN: {e}")
-            # Keep showing profile data even if VIN read fails
-
-    def _refresh_adapter_status(self) -> None:
-        """Refresh CAN adapter detection status."""
+    def _scan_interface(self):
+        """Scan for CAN interface."""
         interfaces = self._connection_manager.discover_interfaces()
-        names = [iface.name for iface in interfaces]
-        self._status_indicator.set_adapter_detected(len(interfaces), names)
 
-    def _enable_pages(self, enabled: bool) -> None:
-        """Enable/disable navigation to pages."""
+        if interfaces:
+            iface = interfaces[0]
+            self._iface_label.setText(f"Found: {iface.name} (SocketCAN @ 500kbps)")
+            self._iface_label.setStyleSheet("color: #00cc00;")
+            self._connect_btn.setEnabled(True)
+            self._current_interface = iface
+        else:
+            self._iface_label.setText("No CAN interface found - connect adapter and run setup")
+            self._iface_label.setStyleSheet("color: #cc6600;")
+            self._connect_btn.setEnabled(False)
+            self._current_interface = None
+
+    def _connect(self):
+        """Connect to vehicle."""
+        if not hasattr(self, '_current_interface') or not self._current_interface:
+            return
+
+        self._connect_btn.setEnabled(False)
+
+        if self._connection_manager.connect(self._current_interface):
+            self._on_connected()
+        else:
+            error = self._connection_manager.last_error
+            if error:
+                QMessageBox.warning(self, "Connection Failed", f"{error.message}\n\n{error.suggestion}")
+            self._connect_btn.setEnabled(True)
+
+    def _disconnect(self):
+        """Disconnect from vehicle."""
+        self._connection_manager.disconnect()
+        self._on_disconnected()
+
+    def _on_connected(self):
+        """Handle successful connection."""
+        self._status_label.setText("Connected")
+        self._status_label.setStyleSheet("color: #00cc00;")
+        self._connect_btn.setEnabled(False)
+        self._disconnect_btn.setEnabled(True)
+
+        # Enable nav
+        for key, btn in self._nav_buttons.items():
+            btn.setEnabled(True)
+
+        # Initialize UDS client
+        try:
+            from e92_pulse.protocols.uds_client import UDSClient
+            from e92_pulse.services.module_scanner import ModuleScanner
+
+            transport = self._connection_manager.get_transport()
+            self._uds_client = UDSClient(transport, self._safety_manager)
+            self._module_scanner = ModuleScanner(
+                self._uds_client, self._module_registry, self._safety_manager
+            )
+        except Exception as e:
+            logger.error(f"Failed to init UDS: {e}")
+
+    def _on_disconnected(self):
+        """Handle disconnection."""
+        self._status_label.setText("Disconnected")
+        self._status_label.setStyleSheet("color: #cc0000;")
+        self._connect_btn.setEnabled(True)
+        self._disconnect_btn.setEnabled(False)
+
+        # Disable nav except connect
         for key, btn in self._nav_buttons.items():
             if key != "connect":
-                btn.setEnabled(enabled)
+                btn.setEnabled(False)
 
-    def _show_about(self) -> None:
-        """Show about dialog."""
-        QMessageBox.about(
-            self,
-            "About E92 Pulse",
-            "<h2>E92 Pulse</h2>"
-            "<p>Version 0.1.0</p>"
-            "<p>BMW E92 M3 Diagnostic Tool</p>"
-            "<p>A production-grade diagnostic GUI tool using SocketCAN.</p>"
-            "<hr>"
-            "<p><b>What this tool does NOT do:</b></p>"
-            "<ul>"
-            "<li>Immobilizer/key programming</li>"
-            "<li>Security bypass</li>"
-            "<li>VIN tampering</li>"
-            "<li>Odometer changes</li>"
-            "<li>ECU flashing/coding</li>"
-            "</ul>"
-            "<p>These restrictions are by design for safety.</p>",
+        self._show_page("connect")
+
+    def _start_scan(self):
+        """Start module scan."""
+        if not self._module_scanner:
+            QMessageBox.warning(self, "Error", "Not connected to vehicle")
+            return
+
+        self._scan_btn.setEnabled(False)
+        self._scan_progress.show()
+        self._scan_progress.setValue(0)
+        self._module_table.setRowCount(0)
+
+        # Run scan
+        try:
+            modules = self._module_registry.get_all_modules()
+            total = len(modules)
+
+            for i, module in enumerate(modules):
+                self._scan_progress.setValue(int((i / total) * 100))
+
+                try:
+                    result = self._module_scanner.probe_module(module)
+                    self._add_module_result(module, result)
+                except Exception as e:
+                    self._add_module_result(module, {"status": "error", "error": str(e)})
+
+            self._scan_progress.setValue(100)
+        except Exception as e:
+            QMessageBox.warning(self, "Scan Error", str(e))
+        finally:
+            self._scan_btn.setEnabled(True)
+            QTimer.singleShot(2000, self._scan_progress.hide)
+
+    def _add_module_result(self, module, result):
+        """Add module result to table."""
+        row = self._module_table.rowCount()
+        self._module_table.insertRow(row)
+
+        self._module_table.setItem(row, 0, QTableWidgetItem(module.name))
+        self._module_table.setItem(row, 1, QTableWidgetItem(f"0x{module.address:02X}"))
+
+        status = result.get("status", "unknown")
+        status_item = QTableWidgetItem(status.upper())
+        if status == "ok":
+            status_item.setForeground(QColor("#00cc00"))
+        elif status == "fault":
+            status_item.setForeground(QColor("#ffaa00"))
+        else:
+            status_item.setForeground(QColor("#cc0000"))
+        self._module_table.setItem(row, 2, status_item)
+
+        faults = result.get("fault_count", 0)
+        self._module_table.setItem(row, 3, QTableWidgetItem(str(faults)))
+
+    def _reset_all_ecus(self):
+        """Reset all ECUs."""
+        reply = QMessageBox.question(
+            self, "Confirm Reset",
+            "This will send soft reset to all ECUs.\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
 
-    def closeEvent(self, event) -> None:
-        """Handle window close."""
-        # Save window geometry
-        geom = self.geometry()
-        self._config.ui.window_geometry = {
-            "x": geom.x(),
-            "y": geom.y(),
-            "width": geom.width(),
-            "height": geom.height(),
-        }
-        save_config(self._config)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
 
-        # Disconnect if connected
+        if not self._uds_client:
+            QMessageBox.warning(self, "Error", "Not connected")
+            return
+
+        self._reset_status.setText("Resetting ECUs...")
+
+        try:
+            modules = self._module_registry.get_all_modules()
+            for module in modules:
+                try:
+                    self._uds_client.ecu_reset(module.address, reset_type=0x01)
+                except Exception:
+                    pass
+
+            self._reset_status.setText("Reset complete")
+        except Exception as e:
+            self._reset_status.setText(f"Error: {e}")
+            self._reset_status.setStyleSheet("color: #cc0000;")
+
+    def _clear_all_dtcs(self):
+        """Clear all fault codes."""
+        reply = QMessageBox.question(
+            self, "Confirm Clear",
+            "This will clear all fault codes from all ECUs.\n\nContinue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        if not self._uds_client:
+            QMessageBox.warning(self, "Error", "Not connected")
+            return
+
+        self._reset_status.setText("Clearing fault codes...")
+
+        try:
+            modules = self._module_registry.get_all_modules()
+            for module in modules:
+                try:
+                    self._uds_client.clear_dtcs(module.address)
+                except Exception:
+                    pass
+
+            self._reset_status.setText("Fault codes cleared")
+        except Exception as e:
+            self._reset_status.setText(f"Error: {e}")
+            self._reset_status.setStyleSheet("color: #cc0000;")
+
+    def closeEvent(self, event):
+        """Handle window close."""
         if self._connection_manager.is_connected:
             self._connection_manager.disconnect()
-
-        logger.info("Application closing")
         event.accept()
