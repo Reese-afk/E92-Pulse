@@ -7,6 +7,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import can
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QMessageBox, QProgressBar,
@@ -102,8 +104,6 @@ class CANWorker(QThread):
 
     def run(self):
         try:
-            import can
-
             bus = can.interface.Bus(channel=self.interface, interface='socketcan')
 
             if self.operation == "scan":
@@ -474,7 +474,6 @@ class MainWindow(QMainWindow):
 
         # Simple sequential read
         try:
-            import can
             bus = can.interface.Bus(channel=self.interface, interface='socketcan')
 
             for addr, name in ECU_LIST.items():
@@ -521,7 +520,6 @@ class MainWindow(QMainWindow):
         self.log("Clearing fault codes from all ECUs...")
 
         try:
-            import can
             bus = can.interface.Bus(channel=self.interface, interface='socketcan')
 
             cleared = 0
