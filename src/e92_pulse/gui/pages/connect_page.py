@@ -23,10 +23,6 @@ from PyQt6.QtGui import QFont
 from e92_pulse.core.connection import ConnectionManager, ConnectionState, InterfaceInfo
 from e92_pulse.core.config import AppConfig
 from e92_pulse.core.app_logging import get_logger
-from e92_pulse.transport.can_transport import (
-    detect_usb_can_adapters,
-    get_interface_status,
-)
 
 logger = get_logger(__name__)
 
@@ -102,12 +98,6 @@ class ConnectPage(QWidget):
         iface_group = QGroupBox("CAN Interface")
         iface_layout = QVBoxLayout(iface_group)
 
-        # USB Adapter detection status
-        self._adapter_status = QLabel("Checking for USB CAN adapters...")
-        self._adapter_status.setStyleSheet("color: #888888; font-size: 11px; background: transparent;")
-        self._adapter_status.setWordWrap(True)
-        iface_layout.addWidget(self._adapter_status)
-
         iface_row = QHBoxLayout()
         self._interface_combo = QComboBox()
         self._interface_combo.setMinimumWidth(300)
@@ -126,20 +116,6 @@ class ConnectPage(QWidget):
         self._iface_details.setStyleSheet("color: #888888; font-size: 11px;")
         self._iface_details.setWordWrap(True)
         iface_layout.addWidget(self._iface_details)
-
-        # Test adapter button
-        self._test_btn = QPushButton("Test Adapter")
-        self._test_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #336699;
-            }
-            QPushButton:hover {
-                background-color: #4477aa;
-            }
-        """)
-        self._test_btn.clicked.connect(self._on_test_adapter)
-        self._test_btn.setEnabled(False)
-        iface_layout.addWidget(self._test_btn)
 
         left_layout.addWidget(iface_group)
 
@@ -288,44 +264,19 @@ class ConnectPage(QWidget):
     def _scan_interfaces(self) -> None:
         """Scan for available CAN interfaces."""
         self._interface_combo.clear()
-
-        # First check for USB CAN adapters (even if not configured)
-        usb_adapters = detect_usb_can_adapters()
-        if usb_adapters:
-            adapter_names = [a.get("name", "Unknown") for a in usb_adapters]
-            self._adapter_status.setText(
-                f"USB CAN adapter detected: {', '.join(adapter_names)}"
-            )
-            self._adapter_status.setStyleSheet("color: #00cc00; font-size: 11px;")
-        else:
-            self._adapter_status.setText(
-                "No USB CAN adapter detected. Connect your Innomaker USB2CAN."
-            )
-            self._adapter_status.setStyleSheet("color: #cc6600; font-size: 11px;")
-
-        # Now check for configured SocketCAN interfaces
         self._interfaces = self._connection_manager.discover_interfaces()
 
         if not self._interfaces:
             self._interface_combo.addItem("No CAN interfaces detected")
             self._interface_combo.setEnabled(False)
             self._connect_btn.setEnabled(False)
-            self._test_btn.setEnabled(False)
-
-            if usb_adapters:
-                self._iface_details.setText(
-                    "USB adapter found but interface not configured.\n"
-                    "Run: sudo ip link set can0 up type can bitrate 500000"
-                )
-            else:
-                self._iface_details.setText(
-                    "No SocketCAN interfaces found.\n"
-                    "Connect a CAN adapter and configure it."
-                )
+            self._iface_details.setText(
+                "No SocketCAN interfaces found.\n"
+                "Connect a CAN adapter and configure it."
+            )
         else:
             self._interface_combo.setEnabled(True)
             self._connect_btn.setEnabled(True)
-            self._test_btn.setEnabled(True)
 
             for iface in self._interfaces:
                 if iface.interface_type == "virtual":
@@ -438,86 +389,3 @@ class ConnectPage(QWidget):
             self._connect_btn.setEnabled(len(self._interfaces) > 0)
             self._disconnect_btn.setEnabled(False)
             self._rescan_btn.setEnabled(True)
-
-    def _on_test_adapter(self) -> None:
-        """Test the CAN adapter without connecting to a vehicle."""
-        index = self._interface_combo.currentIndex()
-        if index < 0 or index >= len(self._interfaces):
-            QMessageBox.warning(
-                self,
-                "No Interface",
-                "Please select a CAN interface first.",
-            )
-            return
-
-        iface = self._interfaces[index]
-        iface_name = iface.name
-
-        # Get detailed interface status
-        status = get_interface_status(iface_name)
-
-        # Build test result message
-        results = []
-        all_ok = True
-
-        # Check interface exists
-        if status["exists"]:
-            results.append(f"Interface {iface_name}: FOUND")
-        else:
-            results.append(f"Interface {iface_name}: NOT FOUND")
-            all_ok = False
-
-        # Check if it's a CAN interface
-        if status["is_can"]:
-            results.append("CAN type: OK")
-        else:
-            results.append("CAN type: NOT DETECTED")
-            all_ok = False
-
-        # Check if interface is up
-        if status["is_up"]:
-            results.append(f"Interface state: UP ({status['state']})")
-        else:
-            results.append(f"Interface state: DOWN ({status['state']})")
-            results.append("Run: sudo ip link set can0 up type can bitrate 500000")
-            all_ok = False
-
-        # Check bitrate
-        if status["bitrate"]:
-            results.append(f"Bitrate: {status['bitrate']} bps")
-            if status["bitrate"] != 500000:
-                results.append("Warning: BMW requires 500000 bps")
-        else:
-            results.append("Bitrate: Unknown")
-
-        # Try to open the interface briefly
-        if all_ok:
-            try:
-                import can
-                bus = can.interface.Bus(
-                    channel=iface_name,
-                    interface="socketcan",
-                )
-                bus_state = bus.state
-                bus.shutdown()
-                results.append(f"CAN bus open: OK (state: {bus_state})")
-                results.append("")
-                results.append("ADAPTER TEST PASSED!")
-                results.append("Your adapter is ready for vehicle connection.")
-            except Exception as e:
-                results.append(f"CAN bus open: FAILED ({e})")
-                all_ok = False
-
-        # Show results
-        if all_ok:
-            QMessageBox.information(
-                self,
-                "Adapter Test Passed",
-                "\n".join(results),
-            )
-        else:
-            QMessageBox.warning(
-                self,
-                "Adapter Test Failed",
-                "\n".join(results),
-            )
