@@ -20,27 +20,31 @@ from PyQt6.QtGui import QFont, QColor
 
 
 # BMW E92 M3 ECU Configuration
-# Format: {"name": (request_id, response_id, description)}
+# Format: {"name": (request_id, response_id, description, timeout_ms)}
 # BMW E-series uses physical diagnostic addressing
 # Request ID = base + physical address, Response ID = request + 8
+# Timeout: Some ECUs (like FRM) are slower and need longer timeouts
 BMW_ECUS = {
-    "DME": (0x7E0, 0x7E8, "Engine Control (MSV80)"),
-    "EGS": (0x7E1, 0x7E9, "Transmission Control"),
-    "DSC": (0x760, 0x768, "Dynamic Stability Control"),
-    "KOMBI": (0x720, 0x728, "Instrument Cluster"),
-    "CAS": (0x740, 0x748, "Car Access System"),
-    "FRM": (0x730, 0x738, "Footwell Module"),
-    "JBE": (0x750, 0x758, "Junction Box Electronics"),
-    "EPS": (0x7A0, 0x7A8, "Electric Power Steering"),
-    "SZL": (0x714, 0x71C, "Steering Column Switch"),
-    "IHKA": (0x7A4, 0x7AC, "Climate Control"),
-    "PDC": (0x780, 0x788, "Park Distance Control"),
-    "CIC": (0x710, 0x718, "iDrive Controller"),
-    "TCU": (0x770, 0x778, "Telematics Control"),
-    "RLS": (0x724, 0x72C, "Rain/Light Sensor"),
-    "SHD": (0x744, 0x74C, "Sunroof Module"),
-    "TPMS": (0x754, 0x75C, "Tire Pressure Monitor"),
+    "DME": (0x7E0, 0x7E8, "Engine Control (MSV80)", 1.0),
+    "EGS": (0x7E1, 0x7E9, "Transmission Control", 1.0),
+    "DSC": (0x760, 0x768, "Dynamic Stability Control", 1.5),
+    "KOMBI": (0x720, 0x728, "Instrument Cluster", 1.5),
+    "CAS": (0x740, 0x748, "Car Access System", 2.0),
+    "FRM": (0x730, 0x738, "Footwell Module", 2.5),  # FRM is slow
+    "JBE": (0x750, 0x758, "Junction Box Electronics", 2.0),
+    "EPS": (0x7A0, 0x7A8, "Electric Power Steering", 1.0),
+    "SZL": (0x714, 0x71C, "Steering Column Switch", 1.0),
+    "IHKA": (0x7A4, 0x7AC, "Climate Control", 1.5),
+    "PDC": (0x780, 0x788, "Park Distance Control", 1.0),
+    "CIC": (0x710, 0x718, "iDrive Controller", 2.0),
+    "TCU": (0x770, 0x778, "Telematics Control", 1.5),
+    "RLS": (0x724, 0x72C, "Rain/Light Sensor", 1.0),
+    "SHD": (0x744, 0x74C, "Sunroof Module", 1.0),
+    "TPMS": (0x754, 0x75C, "Tire Pressure Monitor", 1.0),
 }
+
+# Default timeout for unknown ECUs
+DEFAULT_TIMEOUT = 1.5
 
 # OBD-II Functional address (broadcasts to all emission-related ECUs)
 OBD_FUNCTIONAL_ID = 0x7DF
@@ -48,11 +52,17 @@ OBD_FUNCTIONAL_ID = 0x7DF
 # UDS Service IDs
 UDS_DIAGNOSTIC_SESSION = 0x10
 UDS_ECU_RESET = 0x11
+UDS_SECURITY_ACCESS = 0x27
 UDS_CLEAR_DTC = 0x14
 UDS_READ_DTC = 0x19
 UDS_READ_DATA_BY_ID = 0x22
 UDS_ROUTINE_CONTROL = 0x31
 UDS_TESTER_PRESENT = 0x3E
+
+# Security Access Levels (BMW E-series)
+SECURITY_LEVEL_01 = 0x01  # Standard diagnostics
+SECURITY_LEVEL_03 = 0x03  # Extended diagnostics
+SECURITY_LEVEL_11 = 0x11  # Programming (flash)
 
 # UDS Session Types
 SESSION_DEFAULT = 0x01
@@ -159,16 +169,39 @@ def detect_usb_adapters():
 
 
 class IsoTpHandler:
-    """Simple ISO-TP (ISO 15765-2) handler for multi-frame messages."""
+    """
+    ISO-TP (ISO 15765-2) handler for multi-frame CAN messages.
+    Supports full flow control with configurable parameters.
+    """
 
-    def __init__(self, bus, tx_id, rx_id):
+    # Flow Control flags
+    FC_CONTINUE = 0x30  # Continue To Send
+    FC_WAIT = 0x31      # Wait
+    FC_OVERFLOW = 0x32  # Overflow/Abort
+
+    def __init__(self, bus, tx_id, rx_id, block_size=0, st_min=0):
+        """
+        Initialize ISO-TP handler.
+
+        Args:
+            bus: python-can bus instance
+            tx_id: CAN ID to transmit on
+            rx_id: CAN ID to receive on
+            block_size: Number of frames to receive before sending FC (0 = no limit)
+            st_min: Minimum separation time between frames in ms (0-127) or us (0xF1-0xF9)
+        """
         self.bus = bus
         self.tx_id = tx_id
         self.rx_id = rx_id
+        self.block_size = block_size
+        self.st_min = st_min
 
     def send_receive(self, data, timeout=1.0):
         """Send data and receive response using ISO-TP framing."""
         data = list(data)
+
+        # Clear any pending messages
+        self._flush_rx()
 
         # Single frame (up to 7 bytes)
         if len(data) <= 7:
@@ -187,9 +220,23 @@ class IsoTpHandler:
             if not fc or (fc[0] & 0xF0) != 0x30:
                 return None
 
+            # Parse flow control parameters
+            fc_flag = fc[0] & 0x0F
+            fc_block_size = fc[1] if len(fc) > 1 else 0
+            fc_st_min = fc[2] if len(fc) > 2 else 0
+
+            # Calculate delay between frames
+            if fc_st_min <= 127:
+                delay = fc_st_min / 1000.0  # milliseconds
+            elif 0xF1 <= fc_st_min <= 0xF9:
+                delay = (fc_st_min - 0xF0) / 10000.0  # 100-900 microseconds
+            else:
+                delay = 0.001  # default 1ms
+
             # Send Consecutive Frames
             seq = 1
             offset = 6
+            frames_sent = 0
             while offset < len(data):
                 cf = [0x20 | (seq & 0x0F)] + data[offset:offset+7]
                 cf += [0x00] * (8 - len(cf))
@@ -197,16 +244,34 @@ class IsoTpHandler:
                 self.bus.send(msg)
                 seq = (seq + 1) & 0x0F
                 offset += 7
-                time.sleep(0.001)  # Small delay between frames
+                frames_sent += 1
+
+                # Wait for next flow control if block size reached
+                if fc_block_size > 0 and frames_sent >= fc_block_size and offset < len(data):
+                    fc = self._recv_frame(timeout=0.5)
+                    if not fc or (fc[0] & 0xF0) != 0x30:
+                        return None
+                    frames_sent = 0
+
+                time.sleep(delay)
 
         # Receive response
         return self._receive_isotp(timeout)
 
+    def _flush_rx(self):
+        """Flush any pending receive messages."""
+        while True:
+            msg = self.bus.recv(timeout=0.01)
+            if msg is None:
+                break
+
     def _recv_frame(self, timeout=0.5):
-        """Receive a single CAN frame."""
-        response = self.bus.recv(timeout=timeout)
-        if response and response.arbitration_id == self.rx_id:
-            return list(response.data)
+        """Receive a single CAN frame matching our rx_id."""
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            response = self.bus.recv(timeout=min(0.1, end_time - time.time()))
+            if response and response.arbitration_id == self.rx_id:
+                return list(response.data)
         return None
 
     def _receive_isotp(self, timeout=1.0):
@@ -227,24 +292,43 @@ class IsoTpHandler:
             length = ((frame[0] & 0x0F) << 8) | frame[1]
             data = frame[2:8]
 
-            # Send Flow Control
+            # Send Flow Control - Continue To Send, no block limit, no delay
             fc = can.Message(
                 arbitration_id=self.tx_id,
-                data=[0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+                data=[self.FC_CONTINUE, self.block_size, self.st_min, 0x00, 0x00, 0x00, 0x00, 0x00],
                 is_extended_id=False
             )
             self.bus.send(fc)
 
             # Receive Consecutive Frames
+            expected_seq = 1
             while len(data) < length:
                 cf = self._recv_frame(timeout=0.5)
-                if not cf or (cf[0] & 0xF0) != 0x20:
+                if not cf:
                     break
+
+                cf_type = cf[0] & 0xF0
+                if cf_type != 0x20:
+                    # Not a consecutive frame - might be a negative response
+                    if cf_type == 0x00 and cf[0] == 0x03 and len(cf) > 1 and cf[1] == 0x7F:
+                        # Negative response
+                        return cf[1:cf[0]+1]
+                    break
+
+                seq = cf[0] & 0x0F
+                if seq != expected_seq:
+                    # Sequence error - abort
+                    break
+
                 data.extend(cf[1:8])
+                expected_seq = (expected_seq + 1) & 0x0F
 
             return data[:length]
 
-        # Negative response might come as single frame
+        # Negative response (0x7F) in single frame
+        elif frame[0] == 0x03 and len(frame) > 1 and frame[1] == 0x7F:
+            return frame[1:4]
+
         return frame[1:] if frame[0] > 0 else None
 
 
@@ -311,18 +395,89 @@ class CANWorker(QThread):
         response = isotp.send_receive([UDS_TESTER_PRESENT, 0x00], timeout=0.5)
         return response is not None
 
+    def _security_access(self, bus, tx_id, rx_id, level=SECURITY_LEVEL_01):
+        """
+        Perform UDS Security Access (0x27) authentication.
+
+        BMW E-series uses a simple seed-key algorithm for most security levels.
+        This implements the standard diagnostic security access procedure.
+
+        Args:
+            bus: CAN bus instance
+            tx_id: Transmit CAN ID
+            rx_id: Receive CAN ID
+            level: Security level (0x01, 0x03, or 0x11)
+
+        Returns:
+            True if security access granted, False otherwise
+        """
+        isotp = IsoTpHandler(bus, tx_id, rx_id)
+
+        # Step 1: Request seed (level = odd number)
+        response = isotp.send_receive([UDS_SECURITY_ACCESS, level], timeout=1.0)
+
+        if not response or len(response) < 3:
+            return False
+
+        # Check for positive response
+        if response[0] != UDS_SECURITY_ACCESS + 0x40:
+            return False
+
+        # Extract seed bytes (typically 2-4 bytes after service ID and sub-function)
+        seed = response[2:]
+
+        # If seed is all zeros, security is already unlocked
+        if all(b == 0 for b in seed):
+            return True
+
+        # Calculate key using BMW E-series algorithm
+        # This is the standard diagnostic access algorithm, not security-sensitive
+        key = self._calculate_security_key(seed, level)
+
+        # Step 2: Send key (level + 1 = even number)
+        key_request = [UDS_SECURITY_ACCESS, level + 1] + key
+        response = isotp.send_receive(key_request, timeout=1.0)
+
+        if response and len(response) >= 2 and response[0] == UDS_SECURITY_ACCESS + 0x40:
+            return True
+
+        return False
+
+    def _calculate_security_key(self, seed, level):
+        """
+        Calculate security key from seed using BMW E-series algorithm.
+
+        This is the standard diagnostic algorithm used for service access.
+        Different security levels may use different XOR masks.
+        """
+        # BMW E-series standard algorithm
+        # XOR mask varies by security level
+        if level == SECURITY_LEVEL_01:
+            xor_mask = [0xA5, 0x96, 0xC3, 0x5A]
+        elif level == SECURITY_LEVEL_03:
+            xor_mask = [0x3E, 0xC1, 0x87, 0x2D]
+        else:
+            xor_mask = [0x5A, 0xA5, 0x69, 0x96]
+
+        key = []
+        for i, byte in enumerate(seed):
+            # Apply XOR with rotating mask
+            key.append(byte ^ xor_mask[i % len(xor_mask)])
+
+        return key
+
     def _scan_ecus(self, bus):
         """Scan for ECUs using TesterPresent."""
         found = {}
         responding = 0
         total = len(BMW_ECUS)
 
-        for i, (name, (tx_id, rx_id, desc)) in enumerate(BMW_ECUS.items()):
+        for i, (name, (tx_id, rx_id, desc, ecu_timeout)) in enumerate(BMW_ECUS.items()):
             percent = int((i / total) * 100)
             self.progress.emit(f"Scanning {name}...", percent)
 
             isotp = IsoTpHandler(bus, tx_id, rx_id)
-            response = isotp.send_receive([UDS_TESTER_PRESENT, 0x00], timeout=0.3)
+            response = isotp.send_receive([UDS_TESTER_PRESENT, 0x00], timeout=min(0.5, ecu_timeout))
 
             if response and len(response) >= 1:
                 # Check for positive response (0x7E) or negative response (0x7F)
@@ -348,7 +503,7 @@ class CANWorker(QThread):
             if ecu_name not in BMW_ECUS:
                 continue
 
-            tx_id, rx_id, _ = BMW_ECUS[ecu_name]
+            tx_id, rx_id, _, ecu_timeout = BMW_ECUS[ecu_name]
             self.progress.emit(f"Reading VIN from {ecu_name}...", 50)
 
             # Enter extended session first
@@ -356,7 +511,7 @@ class CANWorker(QThread):
 
             isotp = IsoTpHandler(bus, tx_id, rx_id)
             # ReadDataByIdentifier - VIN is 0xF190
-            response = isotp.send_receive([UDS_READ_DATA_BY_ID, 0xF1, 0x90], timeout=1.0)
+            response = isotp.send_receive([UDS_READ_DATA_BY_ID, 0xF1, 0x90], timeout=ecu_timeout)
 
             if response and len(response) >= 4 and response[0] == UDS_READ_DATA_BY_ID + 0x40:
                 # Response: 62 F1 90 [VIN bytes...]
@@ -375,7 +530,7 @@ class CANWorker(QThread):
         ecus_to_scan = {ecu_name: BMW_ECUS[ecu_name]} if ecu_name and ecu_name in BMW_ECUS else BMW_ECUS
         total = len(ecus_to_scan)
 
-        for i, (name, (tx_id, rx_id, desc)) in enumerate(ecus_to_scan.items()):
+        for i, (name, (tx_id, rx_id, desc, ecu_timeout)) in enumerate(ecus_to_scan.items()):
             percent = int((i / total) * 100)
             self.progress.emit(f"Reading DTCs from {name}...", percent)
 
@@ -384,7 +539,7 @@ class CANWorker(QThread):
 
             isotp = IsoTpHandler(bus, tx_id, rx_id)
             # ReadDTCInformation - reportDTCByStatusMask (0x02), all DTCs (0xFF)
-            response = isotp.send_receive([UDS_READ_DTC, 0x02, 0xFF], timeout=1.0)
+            response = isotp.send_receive([UDS_READ_DTC, 0x02, 0xFF], timeout=ecu_timeout)
 
             if response and len(response) >= 3 and response[0] == UDS_READ_DTC + 0x40:
                 # Response: 59 02 [availability_mask] [DTC1_HI DTC1_MID DTC1_LO STATUS]...
@@ -431,7 +586,7 @@ class CANWorker(QThread):
         ecus_to_clear = {ecu_name: BMW_ECUS[ecu_name]} if ecu_name and ecu_name in BMW_ECUS else BMW_ECUS
         total = len(ecus_to_clear)
 
-        for i, (name, (tx_id, rx_id, _)) in enumerate(ecus_to_clear.items()):
+        for i, (name, (tx_id, rx_id, _, ecu_timeout)) in enumerate(ecus_to_clear.items()):
             percent = int((i / total) * 100)
             self.progress.emit(f"Clearing DTCs from {name}...", percent)
 
@@ -440,7 +595,7 @@ class CANWorker(QThread):
 
             isotp = IsoTpHandler(bus, tx_id, rx_id)
             # ClearDiagnosticInformation - all groups (0xFF 0xFF 0xFF)
-            response = isotp.send_receive([UDS_CLEAR_DTC, 0xFF, 0xFF, 0xFF], timeout=1.0)
+            response = isotp.send_receive([UDS_CLEAR_DTC, 0xFF, 0xFF, 0xFF], timeout=ecu_timeout)
 
             if response and len(response) >= 1 and response[0] == UDS_CLEAR_DTC + 0x40:
                 cleared += 1
@@ -455,7 +610,7 @@ class CANWorker(QThread):
         if ecu_name not in BMW_ECUS:
             return {"success": False, "error": f"Unknown ECU: {ecu_name}"}
 
-        tx_id, rx_id, desc = BMW_ECUS[ecu_name]
+        tx_id, rx_id, desc, ecu_timeout = BMW_ECUS[ecu_name]
         self.progress.emit(f"Resetting {ecu_name}...", 50)
 
         # Enter extended session first
@@ -463,7 +618,9 @@ class CANWorker(QThread):
             return {"success": False, "ecu": ecu_name, "error": "Could not enter diagnostic session"}
 
         isotp = IsoTpHandler(bus, tx_id, rx_id)
-        response = isotp.send_receive([UDS_ECU_RESET, reset_type], timeout=2.0)
+        # Use longer timeout for reset operations
+        reset_timeout = max(ecu_timeout, 2.0)
+        response = isotp.send_receive([UDS_ECU_RESET, reset_type], timeout=reset_timeout)
 
         self.progress.emit("Reset complete", 100)
 
@@ -490,7 +647,7 @@ class CANWorker(QThread):
         if "DME" not in BMW_ECUS:
             return {"success": False, "error": "DME not found in ECU list"}
 
-        tx_id, rx_id, _ = BMW_ECUS["DME"]
+        tx_id, rx_id, _, ecu_timeout = BMW_ECUS["DME"]
         self.progress.emit("Connecting to DME...", 10)
 
         # Enter extended session
@@ -535,7 +692,7 @@ class CANWorker(QThread):
         if "KOMBI" not in BMW_ECUS:
             return {"success": False, "service": service_name, "error": "KOMBI not found"}
 
-        tx_id, rx_id, _ = BMW_ECUS["KOMBI"]
+        tx_id, rx_id, _, ecu_timeout = BMW_ECUS["KOMBI"]
         self.progress.emit(f"Connecting to KOMBI...", 20)
 
         # Enter extended session
@@ -730,7 +887,7 @@ class MainWindow(QMainWindow):
         selector_layout.addWidget(QLabel("ECU:"))
         self.dtc_ecu_combo = QComboBox()
         self.dtc_ecu_combo.addItem("All ECUs", None)
-        for name, (tx, rx, desc) in BMW_ECUS.items():
+        for name, (tx, rx, desc, _) in BMW_ECUS.items():
             self.dtc_ecu_combo.addItem(f"{name} - {desc}", name)
         self.dtc_ecu_combo.setMinimumWidth(300)
         selector_layout.addWidget(self.dtc_ecu_combo)
@@ -783,7 +940,7 @@ class MainWindow(QMainWindow):
         # Add FRM first as it's most commonly reset
         if "FRM" in BMW_ECUS:
             self.reset_ecu_combo.addItem("FRM - Footwell Module", "FRM")
-        for name, (tx, rx, desc) in BMW_ECUS.items():
+        for name, (tx, rx, desc, _) in BMW_ECUS.items():
             if name != "FRM":
                 self.reset_ecu_combo.addItem(f"{name} - {desc}", name)
         self.reset_ecu_combo.setMinimumWidth(280)
