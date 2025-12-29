@@ -301,13 +301,23 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
                 padding: 5px;
                 min-height: 25px;
+                selection-background-color: #3d3d3d;
             }
             QComboBox:hover {
                 border-color: #0066cc;
             }
             QComboBox::drop-down {
-                border: none;
+                subcontrol-origin: padding;
+                subcontrol-position: right center;
                 width: 20px;
+                border: none;
+                background: transparent;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2d2d2d;
+                border: 1px solid #444444;
+                selection-background-color: #3d3d3d;
+                outline: none;
             }
             QLineEdit {
                 background-color: #2d2d2d;
@@ -373,6 +383,7 @@ class MainWindow(QMainWindow):
                 border-color: #0066cc;
             }
             QGroupBox {
+                background-color: transparent;
                 border: 1px solid #444444;
                 border-radius: 5px;
                 margin-top: 10px;
@@ -382,6 +393,7 @@ class MainWindow(QMainWindow):
                 subcontrol-origin: margin;
                 left: 10px;
                 padding: 0 5px;
+                background-color: transparent;
             }
         """)
 
