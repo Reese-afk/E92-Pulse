@@ -397,6 +397,147 @@ def list_can_interfaces() -> list[str]:
     return sorted(interfaces)
 
 
+def detect_usb_can_adapters() -> list[dict]:
+    """
+    Detect USB CAN adapters that may not be configured yet.
+
+    Returns:
+        List of detected USB CAN adapters with info
+    """
+    adapters = []
+
+    # Known USB CAN adapter VID:PID pairs
+    KNOWN_CAN_ADAPTERS = {
+        (0x1D50, 0x606F): "CANable/candleLight",
+        (0x1D50, 0x606D): "CANable 2.0",
+        (0x0483, 0x5740): "STM32 USB CAN",
+        (0x16D0, 0x0E88): "USB2CAN",
+        (0x1209, 0x2323): "Innomaker USB2CAN",
+        (0x1FC9, 0x0083): "NXP LPC USB CAN",
+        (0x0403, 0x6015): "FTDI USB CAN",
+        (0x1FC9, 0x0089): "USB CAN Analyzer",
+    }
+
+    try:
+        # Check /sys/bus/usb/devices for USB devices
+        import os
+        usb_path = "/sys/bus/usb/devices"
+
+        if os.path.exists(usb_path):
+            for device in os.listdir(usb_path):
+                device_path = os.path.join(usb_path, device)
+                vid_path = os.path.join(device_path, "idVendor")
+                pid_path = os.path.join(device_path, "idProduct")
+
+                try:
+                    if os.path.exists(vid_path) and os.path.exists(pid_path):
+                        with open(vid_path) as f:
+                            vid = int(f.read().strip(), 16)
+                        with open(pid_path) as f:
+                            pid = int(f.read().strip(), 16)
+
+                        # Check if it's a known CAN adapter
+                        if (vid, pid) in KNOWN_CAN_ADAPTERS:
+                            name = KNOWN_CAN_ADAPTERS[(vid, pid)]
+                            adapters.append({
+                                "vid": vid,
+                                "pid": pid,
+                                "name": name,
+                                "device": device,
+                            })
+                        # Also check for gs_usb devices (generic CAN)
+                        elif vid == 0x1D50:  # OpenMoko/candleLight VID
+                            adapters.append({
+                                "vid": vid,
+                                "pid": pid,
+                                "name": "gs_usb CAN adapter",
+                                "device": device,
+                            })
+                except (IOError, OSError, ValueError):
+                    pass
+
+        # Also check for gs_usb driver binding
+        gs_usb_path = "/sys/bus/usb/drivers/gs_usb"
+        if os.path.exists(gs_usb_path):
+            for item in os.listdir(gs_usb_path):
+                if ":" in item:  # USB device binding format
+                    if not any(a.get("driver") == "gs_usb" for a in adapters):
+                        adapters.append({
+                            "name": "gs_usb CAN adapter",
+                            "driver": "gs_usb",
+                            "device": item,
+                        })
+
+    except Exception as e:
+        logger.debug(f"Error detecting USB CAN adapters: {e}")
+
+    return adapters
+
+
+def get_interface_status(interface: str = "can0") -> dict:
+    """
+    Get detailed status of a CAN interface.
+
+    Returns:
+        Dict with interface status info
+    """
+    import os
+
+    status = {
+        "name": interface,
+        "exists": False,
+        "is_up": False,
+        "is_can": False,
+        "bitrate": None,
+        "state": "unknown",
+        "error": None,
+    }
+
+    net_path = f"/sys/class/net/{interface}"
+
+    if not os.path.exists(net_path):
+        status["error"] = f"Interface {interface} not found"
+        return status
+
+    status["exists"] = True
+
+    # Check if it's a CAN interface
+    try:
+        with open(f"{net_path}/type") as f:
+            if f.read().strip() == "280":
+                status["is_can"] = True
+    except (IOError, OSError):
+        pass
+
+    # Check operational state
+    try:
+        with open(f"{net_path}/operstate") as f:
+            state = f.read().strip()
+            status["state"] = state
+            status["is_up"] = state == "up"
+    except (IOError, OSError):
+        pass
+
+    # Try to get bitrate from can specific stats
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["ip", "-details", "link", "show", interface],
+            capture_output=True,
+            text=True,
+        )
+        if "bitrate" in result.stdout:
+            # Parse bitrate from output
+            for part in result.stdout.split():
+                if part.isdigit() and int(part) > 100000:
+                    status["bitrate"] = int(part)
+                    break
+    except Exception:
+        pass
+
+    return status
+
+
 def setup_can_interface(interface: str = "can0", bitrate: int = BMW_CAN_BITRATE) -> bool:
     """
     Set up a SocketCAN interface (requires root).
