@@ -1,89 +1,22 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "e92-pulse"
-version = "0.1.0"
-description = "Production-grade diagnostic GUI tool for BMW E92 M3 using K+DCAN USB cable"
+version = "1.0.0"
+description = "BMW E92 M3 Diagnostic Tool - Plug and Play"
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.11"
-authors = [
-    {name = "E92 Pulse Contributors"}
-]
-keywords = ["bmw", "e92", "m3", "diagnostics", "obd", "kdcan", "uds"]
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Environment :: X11 Applications :: Qt",
-    "Intended Audience :: Developers",
-    "Intended Audience :: End Users/Desktop",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: POSIX :: Linux",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: System :: Hardware :: Hardware Drivers",
-]
+requires-python = ">=3.10"
 
 dependencies = [
-    "PyQt6>=6.5.0",
-    "pyserial>=3.5",
-    "python-can>=4.2.0",
-    "can-isotp>=2.0.0",
-    "udsoncan>=1.21",
-    "pyyaml>=6.0",
-    "platformdirs>=4.0.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-qt>=4.2.0",
-    "pytest-cov>=4.1.0",
-    "ruff>=0.1.0",
-    "black>=23.0.0",
-    "mypy>=1.5.0",
+    "PyQt6>=6.4.0",
+    "python-can>=4.0.0",
 ]
 
 [project.scripts]
 e92-pulse = "e92_pulse.app:main"
 
-[project.gui-scripts]
-e92-pulse-gui = "e92_pulse.app:main"
-
-[project.urls]
-Homepage = "https://github.com/example/e92-pulse"
-Repository = "https://github.com/example/e92-pulse.git"
-Issues = "https://github.com/example/e92-pulse/issues"
-
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-e92_pulse = ["py.typed", "resources/*"]
-
-[tool.ruff]
-line-length = 100
-target-version = "py311"
-
-[tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
-ignore = ["E501"]
-
-[tool.black]
-line-length = 100
-target-version = ["py311"]
-
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_functions = ["test_*"]
-addopts = "-v --tb=short"
-qt_api = "pyqt6"
