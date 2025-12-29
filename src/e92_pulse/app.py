@@ -3,16 +3,14 @@ E92 Pulse - BMW E92 M3 Diagnostic Tool
 Single-file application for simplicity
 """
 import sys
-import os
 import subprocess
-from pathlib import Path
 
 import can
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QMessageBox, QProgressBar,
-    QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget
+    QTableWidget, QTableWidgetItem, QHeaderView, QTabWidget, QFrame
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
@@ -35,8 +33,9 @@ ECU_LIST = {
 def detect_usb_adapters():
     """Detect USB CAN adapters."""
     adapters = []
+    usb_info = []
 
-    # Check /dev for CAN devices
+    # Check for CAN interfaces
     try:
         result = subprocess.run(
             ["ip", "link", "show"],
@@ -52,15 +51,14 @@ def detect_usb_adapters():
     except Exception:
         pass
 
-    # Check USB devices for known CAN adapters
-    usb_info = []
+    # Check USB devices
     try:
         result = subprocess.run(
             ["lsusb"], capture_output=True, text=True, timeout=5
         )
         for line in result.stdout.split('\n'):
             line_lower = line.lower()
-            if any(x in line_lower for x in ['can', 'innomaker', 'canable', 'peak', 'gs_usb']):
+            if any(x in line_lower for x in ['can', 'innomaker', 'canable', 'peak', 'gs_usb', '1d50:606f', 'geschwister']):
                 usb_info.append(line.strip())
     except Exception:
         pass
@@ -71,23 +69,11 @@ def detect_usb_adapters():
 def setup_can_interface(interface="can0", bitrate=500000):
     """Setup CAN interface."""
     try:
-        # Bring down first
-        subprocess.run(
-            ["sudo", "ip", "link", "set", interface, "down"],
-            capture_output=True, timeout=5
-        )
-        # Set type and bitrate
-        subprocess.run(
-            ["sudo", "ip", "link", "set", interface, "type", "can", "bitrate", str(bitrate)],
-            capture_output=True, timeout=5
-        )
-        # Bring up
-        result = subprocess.run(
-            ["sudo", "ip", "link", "set", interface, "up"],
-            capture_output=True, timeout=5
-        )
+        subprocess.run(["sudo", "ip", "link", "set", interface, "down"], capture_output=True, timeout=5)
+        subprocess.run(["sudo", "ip", "link", "set", interface, "type", "can", "bitrate", str(bitrate)], capture_output=True, timeout=5)
+        result = subprocess.run(["sudo", "ip", "link", "set", interface, "up"], capture_output=True, timeout=5)
         return result.returncode == 0
-    except Exception as e:
+    except Exception:
         return False
 
 
@@ -108,6 +94,8 @@ class CANWorker(QThread):
 
             if self.operation == "scan":
                 results = self._scan_ecus(bus)
+            elif self.operation == "read_vin":
+                results = self._read_vin(bus)
             elif self.operation == "read_dtc":
                 results = self._read_dtcs(bus, self.ecu_address)
             elif self.operation == "clear_dtc":
@@ -124,11 +112,11 @@ class CANWorker(QThread):
     def _scan_ecus(self, bus):
         """Scan for ECUs."""
         found = {}
+        responding = 0
 
         for addr, name in ECU_LIST.items():
             self.progress.emit(f"Scanning {name}...")
 
-            # Send TesterPresent (0x3E)
             tx_id = 0x600 + addr
             rx_id = 0x600 + addr + 8
 
@@ -140,23 +128,54 @@ class CANWorker(QThread):
 
             try:
                 bus.send(msg)
-                # Wait for response
                 response = bus.recv(timeout=0.2)
                 if response and response.arbitration_id == rx_id:
                     found[addr] = {"name": name, "status": "OK"}
+                    responding += 1
                 else:
                     found[addr] = {"name": name, "status": "No Response"}
             except Exception:
                 found[addr] = {"name": name, "status": "Error"}
 
-        return {"ecus": found}
+        return {"ecus": found, "responding": responding}
+
+    def _read_vin(self, bus):
+        """Read VIN from vehicle."""
+        # Try to read VIN from CAS (0x60) using UDS ReadDataByIdentifier (0x22) for VIN (0xF190)
+        tx_id = 0x6F1  # Diagnostic tester address
+        rx_filter = 0x600  # Response base
+
+        # Try different ECUs for VIN
+        for ecu_addr in [0x60, 0x40, 0x12]:  # CAS, KOMBI, DME
+            try:
+                # Read Data By Identifier - VIN (0xF190)
+                msg = can.Message(
+                    arbitration_id=0x600 + ecu_addr,
+                    data=[0x03, 0x22, 0xF1, 0x90, 0x00, 0x00, 0x00, 0x00],
+                    is_extended_id=False
+                )
+                bus.send(msg)
+
+                # Collect response (may be multi-frame)
+                vin_bytes = []
+                for _ in range(5):  # Try to get multiple frames
+                    response = bus.recv(timeout=0.3)
+                    if response:
+                        vin_bytes.extend(response.data[3:])  # Skip header bytes
+
+                if len(vin_bytes) >= 17:
+                    vin = ''.join(chr(b) for b in vin_bytes[:17] if 32 <= b <= 126)
+                    if len(vin) >= 10:
+                        return {"vin": vin, "source": ECU_LIST.get(ecu_addr, "Unknown")}
+
+            except Exception:
+                continue
+
+        return {"vin": None, "error": "Could not read VIN"}
 
     def _read_dtcs(self, bus, addr):
         """Read DTCs from ECU."""
-        # UDS Read DTC (0x19 0x02 0xFF 0x00)
         tx_id = 0x600 + addr
-        rx_id = 0x600 + addr + 8
-
         msg = can.Message(
             arbitration_id=tx_id,
             data=[0x04, 0x19, 0x02, 0xFF, 0x00, 0x00, 0x00, 0x00],
@@ -174,9 +193,7 @@ class CANWorker(QThread):
 
     def _clear_dtcs(self, bus, addr):
         """Clear DTCs from ECU."""
-        # UDS Clear DTC (0x14 0xFF 0xFF 0xFF)
         tx_id = 0x600 + addr
-
         msg = can.Message(
             arbitration_id=tx_id,
             data=[0x04, 0x14, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00],
@@ -186,7 +203,7 @@ class CANWorker(QThread):
         try:
             bus.send(msg)
             response = bus.recv(timeout=0.5)
-            if response and response.data[1] == 0x54:  # Positive response
+            if response and len(response.data) > 1 and response.data[1] == 0x54:
                 return {"success": True}
             return {"success": False, "error": "No positive response"}
         except Exception as e:
@@ -199,10 +216,12 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("E92 Pulse - BMW E92 M3 Diagnostics")
-        self.setMinimumSize(900, 600)
+        self.setMinimumSize(1000, 650)
 
         self.interface = None
         self.worker = None
+        self.connected = False
+        self.vehicle_vin = None
 
         self._setup_ui()
         self._apply_style()
@@ -262,49 +281,103 @@ class MainWindow(QMainWindow):
                 text-align: center;
             }
             QProgressBar::chunk { background-color: #0066cc; }
+            QFrame#sidebar {
+                background-color: #252525;
+                border-right: 1px solid #333;
+            }
         """)
 
     def _setup_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)
 
-        # Header
-        header = QLabel("E92 Pulse")
-        header.setFont(QFont("sans-serif", 28, QFont.Weight.Bold))
-        header.setStyleSheet("color: #00aaff;")
-        layout.addWidget(header)
+        main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        subtitle = QLabel("BMW E92 M3 Diagnostic Tool")
-        subtitle.setStyleSheet("color: #888;")
-        layout.addWidget(subtitle)
+        # Sidebar with vehicle info
+        sidebar = QFrame()
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(220)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(15, 20, 15, 20)
+        sidebar_layout.setSpacing(10)
 
-        # Status bar
-        status_layout = QHBoxLayout()
+        # Logo
+        logo = QLabel("E92 Pulse")
+        logo.setFont(QFont("sans-serif", 20, QFont.Weight.Bold))
+        logo.setStyleSheet("color: #00aaff;")
+        sidebar_layout.addWidget(logo)
 
-        self.status_label = QLabel("Detecting adapter...")
-        self.status_label.setStyleSheet("color: #ffaa00;")
-        status_layout.addWidget(self.status_label)
+        model_label = QLabel("BMW E92 M3")
+        model_label.setStyleSheet("color: #888;")
+        sidebar_layout.addWidget(model_label)
 
-        status_layout.addStretch()
+        sidebar_layout.addSpacing(20)
 
+        # Connection status
+        conn_title = QLabel("Connection")
+        conn_title.setFont(QFont("sans-serif", 11, QFont.Weight.Bold))
+        sidebar_layout.addWidget(conn_title)
+
+        self.adapter_label = QLabel("No adapter")
+        self.adapter_label.setStyleSheet("color: #cc6600;")
+        sidebar_layout.addWidget(self.adapter_label)
+
+        self.conn_status = QLabel("Disconnected")
+        self.conn_status.setStyleSheet("color: #cc0000;")
+        sidebar_layout.addWidget(self.conn_status)
+
+        sidebar_layout.addSpacing(20)
+
+        # Vehicle info
+        vehicle_title = QLabel("Vehicle")
+        vehicle_title.setFont(QFont("sans-serif", 11, QFont.Weight.Bold))
+        sidebar_layout.addWidget(vehicle_title)
+
+        self.vin_label = QLabel("VIN: --")
+        self.vin_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.vin_label.setWordWrap(True)
+        sidebar_layout.addWidget(self.vin_label)
+
+        self.ecus_label = QLabel("ECUs: --")
+        self.ecus_label.setStyleSheet("color: #888;")
+        sidebar_layout.addWidget(self.ecus_label)
+
+        sidebar_layout.addSpacing(20)
+
+        # Action buttons in sidebar
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.clicked.connect(self.connect_vehicle)
+        self.connect_btn.setEnabled(False)
+        sidebar_layout.addWidget(self.connect_btn)
+
+        self.disconnect_btn = QPushButton("Disconnect")
+        self.disconnect_btn.setObjectName("danger")
+        self.disconnect_btn.clicked.connect(self.disconnect_vehicle)
+        self.disconnect_btn.setEnabled(False)
+        self.disconnect_btn.hide()
+        sidebar_layout.addWidget(self.disconnect_btn)
+
+        sidebar_layout.addStretch()
+
+        # Detect button at bottom
         self.detect_btn = QPushButton("Detect Adapter")
         self.detect_btn.clicked.connect(self.detect_adapter)
-        status_layout.addWidget(self.detect_btn)
+        sidebar_layout.addWidget(self.detect_btn)
 
-        self.setup_btn = QPushButton("Setup CAN")
-        self.setup_btn.clicked.connect(self.setup_can)
-        self.setup_btn.setEnabled(False)
-        status_layout.addWidget(self.setup_btn)
+        main_layout.addWidget(sidebar)
 
-        layout.addLayout(status_layout)
+        # Main content area
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(20, 20, 20, 20)
+        content_layout.setSpacing(15)
 
         # Tabs
         tabs = QTabWidget()
 
-        # Tab 1: Scan
+        # Tab 1: Scan ECUs
         scan_tab = QWidget()
         scan_layout = QVBoxLayout(scan_tab)
 
@@ -323,13 +396,13 @@ class MainWindow(QMainWindow):
 
         self.ecu_table = QTableWidget()
         self.ecu_table.setColumnCount(3)
-        self.ecu_table.setHorizontalHeaderLabels(["ECU", "Address", "Status"])
+        self.ecu_table.setHorizontalHeaderLabels(["ECU Module", "Address", "Status"])
         self.ecu_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         scan_layout.addWidget(self.ecu_table)
 
         tabs.addTab(scan_tab, "Scan ECUs")
 
-        # Tab 2: DTCs
+        # Tab 2: Fault Codes
         dtc_tab = QWidget()
         dtc_layout = QVBoxLayout(dtc_tab)
 
@@ -368,7 +441,8 @@ class MainWindow(QMainWindow):
 
         tabs.addTab(log_tab, "Log")
 
-        layout.addWidget(tabs)
+        content_layout.addWidget(tabs)
+        main_layout.addWidget(content, 1)
 
     def log(self, msg):
         self.log_output.append(msg)
@@ -385,46 +459,126 @@ class MainWindow(QMainWindow):
 
         if adapters:
             self.interface = adapters[0]
-            self.status_label.setText(f"Found: {self.interface}")
-            self.status_label.setStyleSheet("color: #00cc00;")
-            self.setup_btn.setEnabled(True)
-            self.scan_btn.setEnabled(True)
-            self.read_dtc_btn.setEnabled(True)
-            self.clear_dtc_btn.setEnabled(True)
+            self.adapter_label.setText(f"{self.interface}")
+            self.adapter_label.setStyleSheet("color: #00cc00;")
+            self.connect_btn.setEnabled(True)
             self.log(f"CAN interface found: {self.interface}")
         else:
-            self.status_label.setText("No CAN interface - plug in adapter")
-            self.status_label.setStyleSheet("color: #cc6600;")
+            self.adapter_label.setText("No adapter")
+            self.adapter_label.setStyleSheet("color: #cc6600;")
+            self.connect_btn.setEnabled(False)
             self.log("No CAN interface detected.")
-            self.log("Connect USB CAN adapter and click 'Setup CAN'")
+            self.log("Plug in USB CAN adapter and click Detect")
 
-    def setup_can(self):
-        """Setup CAN interface."""
-        self.log("Setting up CAN interface at 500kbps...")
+    def connect_vehicle(self):
+        """Connect to vehicle and read info."""
+        if not self.interface:
+            return
 
-        # Try can0
-        if setup_can_interface("can0", 500000):
-            self.interface = "can0"
-            self.status_label.setText("Ready: can0 @ 500kbps")
-            self.status_label.setStyleSheet("color: #00cc00;")
+        self.log("Connecting to vehicle...")
+        self.connect_btn.setEnabled(False)
+
+        # First try to scan for ECUs to verify connection
+        self.worker = CANWorker("scan", self.interface)
+        self.worker.progress.connect(lambda m: self.log(f"  {m}"))
+        self.worker.finished.connect(self._on_connect_scan_complete)
+        self.worker.start()
+
+    def _on_connect_scan_complete(self, results):
+        """Handle connection scan results."""
+        if "error" in results:
+            self.log(f"Connection error: {results['error']}")
+            self.connect_btn.setEnabled(True)
+            QMessageBox.warning(self, "Connection Failed", results['error'])
+            return
+
+        responding = results.get("responding", 0)
+
+        if responding > 0:
+            self.connected = True
+            self.conn_status.setText("Connected")
+            self.conn_status.setStyleSheet("color: #00cc00;")
+            self.ecus_label.setText(f"ECUs: {responding} responding")
+
+            self.connect_btn.hide()
+            self.disconnect_btn.show()
+            self.disconnect_btn.setEnabled(True)
+
             self.scan_btn.setEnabled(True)
             self.read_dtc_btn.setEnabled(True)
             self.clear_dtc_btn.setEnabled(True)
-            self.log("CAN interface configured successfully!")
+
+            self.log(f"Connected! {responding} ECUs responding.")
+
+            # Populate ECU table
+            ecus = results.get("ecus", {})
+            self.ecu_table.setRowCount(0)
+            for addr, info in ecus.items():
+                row = self.ecu_table.rowCount()
+                self.ecu_table.insertRow(row)
+                self.ecu_table.setItem(row, 0, QTableWidgetItem(info["name"]))
+                self.ecu_table.setItem(row, 1, QTableWidgetItem(f"0x{addr:02X}"))
+                status_item = QTableWidgetItem(info["status"])
+                if info["status"] == "OK":
+                    status_item.setForeground(QColor("#00cc00"))
+                else:
+                    status_item.setForeground(QColor("#cc0000"))
+                self.ecu_table.setItem(row, 2, status_item)
+
+            # Try to read VIN
+            self._read_vehicle_vin()
         else:
-            self.log("Failed to setup CAN. Run manually:")
-            self.log("  sudo ip link set can0 up type can bitrate 500000")
+            self.log("No ECUs responded - is ignition ON?")
+            self.connect_btn.setEnabled(True)
             QMessageBox.warning(
-                self, "Setup Failed",
-                "Could not setup CAN interface.\n\n"
-                "Run this command manually:\n"
-                "sudo ip link set can0 up type can bitrate 500000"
+                self, "No Response",
+                "No ECUs responded.\n\nMake sure:\n"
+                "- Ignition is ON\n"
+                "- OBD cable is connected\n"
+                "- CAN interface is up (sudo ip link set can0 up type can bitrate 500000)"
             )
+
+    def _read_vehicle_vin(self):
+        """Read VIN from vehicle."""
+        self.log("Reading VIN...")
+        self.worker = CANWorker("read_vin", self.interface)
+        self.worker.finished.connect(self._on_vin_read)
+        self.worker.start()
+
+    def _on_vin_read(self, results):
+        """Handle VIN read results."""
+        vin = results.get("vin")
+        if vin:
+            self.vehicle_vin = vin
+            self.vin_label.setText(f"VIN: {vin}")
+            self.log(f"VIN: {vin}")
+        else:
+            self.vin_label.setText("VIN: (could not read)")
+            self.log("Could not read VIN")
+
+    def disconnect_vehicle(self):
+        """Disconnect from vehicle."""
+        self.connected = False
+        self.conn_status.setText("Disconnected")
+        self.conn_status.setStyleSheet("color: #cc0000;")
+        self.ecus_label.setText("ECUs: --")
+        self.vin_label.setText("VIN: --")
+        self.vehicle_vin = None
+
+        self.disconnect_btn.hide()
+        self.connect_btn.show()
+        self.connect_btn.setEnabled(True)
+
+        self.scan_btn.setEnabled(False)
+        self.read_dtc_btn.setEnabled(False)
+        self.clear_dtc_btn.setEnabled(False)
+
+        self.ecu_table.setRowCount(0)
+        self.log("Disconnected.")
 
     def scan_ecus(self):
         """Scan for ECUs."""
         if not self.interface:
-            QMessageBox.warning(self, "Error", "No CAN interface detected")
             return
 
         self.scan_btn.setEnabled(False)
@@ -448,6 +602,8 @@ class MainWindow(QMainWindow):
             return
 
         ecus = results.get("ecus", {})
+        responding = results.get("responding", 0)
+
         for addr, info in ecus.items():
             row = self.ecu_table.rowCount()
             self.ecu_table.insertRow(row)
@@ -462,7 +618,8 @@ class MainWindow(QMainWindow):
                 status_item.setForeground(QColor("#cc0000"))
             self.ecu_table.setItem(row, 2, status_item)
 
-        self.log(f"Scan complete. Found {sum(1 for e in ecus.values() if e['status'] == 'OK')} responding ECUs.")
+        self.ecus_label.setText(f"ECUs: {responding} responding")
+        self.log(f"Scan complete. {responding} ECUs responding.")
 
     def read_all_dtcs(self):
         """Read DTCs from all ECUs."""
@@ -472,7 +629,6 @@ class MainWindow(QMainWindow):
         self.dtc_output.clear()
         self.log("Reading fault codes from all ECUs...")
 
-        # Simple sequential read
         try:
             bus = can.interface.Bus(channel=self.interface, interface='socketcan')
 
