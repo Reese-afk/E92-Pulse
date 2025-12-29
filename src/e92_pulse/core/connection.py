@@ -3,17 +3,15 @@ Connection Manager
 
 Manages the lifecycle of diagnostic connections including:
 - Connection establishment and validation
-- Automatic reconnection
-- State management
-- Event notifications
+- Support for SocketCAN interfaces (Linux-native)
+- State management and event notifications
 """
 
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Callable, Protocol
+from typing import Callable, Protocol, Any
 
 from e92_pulse.core.app_logging import get_logger, log_audit_event
-from e92_pulse.core.discovery import PortDiscovery, PortInfo
 from e92_pulse.core.config import AppConfig
 
 logger = get_logger(__name__)
@@ -33,7 +31,7 @@ class ConnectionState(Enum):
 class TransportProtocol(Protocol):
     """Protocol for transport implementations."""
 
-    def open(self, port: str, baud_rate: int) -> bool:
+    def open(self, interface: str, bitrate: int = 500000) -> bool:
         """Open the transport connection."""
         ...
 
@@ -57,6 +55,21 @@ class TransportProtocol(Protocol):
         """Validate the connection is alive."""
         ...
 
+    def set_target_address(self, address: int) -> None:
+        """Set target ECU address."""
+        ...
+
+
+@dataclass
+class InterfaceInfo:
+    """Information about a CAN interface."""
+
+    name: str  # e.g., "can0", "vcan0"
+    interface_type: str  # "socketcan", "virtual"
+    description: str
+    is_available: bool
+    bitrate: int | None = None
+
 
 @dataclass
 class ConnectionError:
@@ -76,25 +89,17 @@ class ConnectionManager:
     """
     Manages diagnostic connection lifecycle.
 
-    Handles port discovery, connection establishment, validation,
-    and automatic reconnection.
+    Supports:
+    - SocketCAN interfaces (can0, can1, etc.)
+    - Virtual CAN for testing (vcan0)
     """
 
     config: AppConfig
     _state: ConnectionState = ConnectionState.DISCONNECTED
-    _transport: TransportProtocol | None = None
-    _current_port: PortInfo | None = None
-    _discovery: PortDiscovery | None = None
+    _transport: Any = None  # TransportProtocol
+    _current_interface: InterfaceInfo | None = None
     _state_callbacks: list[StateChangeCallback] = field(default_factory=list)
     _last_error: ConnectionError | None = None
-    _simulation_mode: bool = False
-
-    def __post_init__(self) -> None:
-        """Initialize connection manager."""
-        self._discovery = PortDiscovery(
-            last_known_port=self.config.last_known_port
-        )
-        self._simulation_mode = self.config.simulation_mode
 
     @property
     def state(self) -> ConnectionState:
@@ -102,9 +107,9 @@ class ConnectionManager:
         return self._state
 
     @property
-    def current_port(self) -> PortInfo | None:
-        """Currently connected port."""
-        return self._current_port
+    def current_interface(self) -> InterfaceInfo | None:
+        """Currently connected interface."""
+        return self._current_interface
 
     @property
     def last_error(self) -> ConnectionError | None:
@@ -125,18 +130,42 @@ class ConnectionManager:
         if callback in self._state_callbacks:
             self._state_callbacks.remove(callback)
 
-    def discover_ports(self, force_rescan: bool = False) -> list[PortInfo]:
-        """Discover available ports."""
-        if self._discovery is None:
-            self._discovery = PortDiscovery()
-        return self._discovery.discover_ports(force_rescan)
+    def discover_interfaces(self) -> list[InterfaceInfo]:
+        """
+        Discover available CAN interfaces.
 
-    def connect(self, port: str | PortInfo | None = None) -> bool:
+        Returns:
+            List of available SocketCAN interfaces
+        """
+        interfaces: list[InterfaceInfo] = []
+
+        # Check for SocketCAN interfaces
+        try:
+            from e92_pulse.transport.can_transport import list_can_interfaces
+
+            can_interfaces = list_can_interfaces()
+            for iface in can_interfaces:
+                is_virtual = iface.startswith("vcan")
+                interfaces.append(
+                    InterfaceInfo(
+                        name=iface,
+                        interface_type="virtual" if is_virtual else "socketcan",
+                        description=f"{'Virtual ' if is_virtual else ''}CAN Interface",
+                        is_available=True,
+                        bitrate=500000,
+                    )
+                )
+        except Exception as e:
+            logger.warning(f"Error discovering CAN interfaces: {e}")
+
+        return interfaces
+
+    def connect(self, interface: str | InterfaceInfo) -> bool:
         """
         Establish a diagnostic connection.
 
         Args:
-            port: Port to connect to (device path, PortInfo, or None for auto)
+            interface: Interface to connect to (name or InterfaceInfo)
 
         Returns:
             True if connection successful
@@ -147,49 +176,21 @@ class ConnectionManager:
 
         self._set_state(ConnectionState.CONNECTING)
 
-        # Resolve port
-        port_info: PortInfo | None = None
-
-        if port is None:
-            # Auto-select best port
-            if self._discovery is None:
-                self._discovery = PortDiscovery()
-            port_info = self._discovery.get_best_port()
-            if port_info is None:
-                self._set_error(
-                    "No diagnostic ports detected",
-                    "NO_PORTS",
-                    recoverable=True,
-                    suggestion="Check cable connection and USB permissions",
-                )
-                return False
-        elif isinstance(port, PortInfo):
-            port_info = port
+        # Resolve interface
+        if isinstance(interface, InterfaceInfo):
+            interface_info = interface
         else:
-            # It's a device path string
-            if self._discovery is None:
-                self._discovery = PortDiscovery()
-            port_info = self._discovery.get_port_by_device(port)
-            if port_info is None:
-                # Create minimal PortInfo for the path
-                from e92_pulse.core.discovery import ChipType
+            # It's an interface name string
+            is_virtual = interface.startswith("vcan")
+            interface_info = InterfaceInfo(
+                name=interface,
+                interface_type="virtual" if is_virtual else "socketcan",
+                description=f"CAN Interface {interface}",
+                is_available=True,
+                bitrate=500000,
+            )
 
-                port_info = PortInfo(
-                    device=port,
-                    name="Manual Port",
-                    description="Manually specified port",
-                    hwid="",
-                    vid=None,
-                    pid=None,
-                    serial_number=None,
-                    manufacturer=None,
-                    product=None,
-                    chip_type=ChipType.UNKNOWN,
-                    by_id_path=None,
-                    score=0,
-                )
-
-        logger.info(f"Connecting to {port_info.device}...")
+        logger.info(f"Connecting to {interface_info.name}...")
 
         # Get or create transport
         if self._transport is None:
@@ -197,46 +198,42 @@ class ConnectionManager:
 
         try:
             # Attempt to open transport
-            if not self._transport.open(
-                port_info.by_id_path or port_info.device,
-                self.config.connection.baud_rate,
-            ):
+            bitrate = interface_info.bitrate or 500000
+            if not self._transport.open(interface_info.name, bitrate):
                 self._set_error(
-                    f"Failed to open port {port_info.device}",
-                    "OPEN_FAILED",
+                    f"Failed to open CAN interface {interface_info.name}",
+                    "CAN_OPEN_FAILED",
                     recoverable=True,
-                    suggestion="Check if port is in use by another application",
+                    suggestion="Check if interface is up: sudo ip link set can0 up type can bitrate 500000",
                 )
                 return False
 
-            self._current_port = port_info
+            self._current_interface = interface_info
             self._set_state(ConnectionState.VALIDATING)
 
             # Validate connection
             if not self._transport.validate():
                 self._transport.close()
                 self._set_error(
-                    "Connection validation failed",
+                    "CAN bus validation failed",
                     "VALIDATION_FAILED",
                     recoverable=True,
-                    suggestion="Ensure ignition is ON and cable is properly connected",
+                    suggestion="Check CAN adapter and vehicle connection",
                 )
                 return False
 
             self._set_state(ConnectionState.CONNECTED)
-            self.config.last_known_port = port_info.device
 
             log_audit_event(
                 "connection_established",
-                f"Connected to {port_info.device}",
+                f"Connected to {interface_info.name}",
                 {
-                    "port": port_info.device,
-                    "chip": port_info.chip_type.name,
-                    "score": port_info.score,
+                    "interface": interface_info.name,
+                    "type": interface_info.interface_type,
                 },
             )
 
-            logger.info(f"Connected successfully to {port_info.device}")
+            logger.info(f"Connected successfully to {interface_info.name}")
             return True
 
         except Exception as e:
@@ -245,48 +242,44 @@ class ConnectionManager:
                 str(e),
                 "CONNECTION_EXCEPTION",
                 recoverable=True,
-                suggestion="Check cable and permissions",
+                suggestion="Check CAN adapter installation and permissions",
             )
             return False
 
     def disconnect(self) -> None:
         """Disconnect from the diagnostic interface."""
-        if self._transport and self._transport.is_open():
+        if self._transport:
             try:
-                self._transport.close()
+                if hasattr(self._transport, 'is_open') and self._transport.is_open():
+                    self._transport.close()
             except Exception as e:
                 logger.warning(f"Error closing transport: {e}")
 
-        port_device = self._current_port.device if self._current_port else "unknown"
-        self._current_port = None
+        interface_name = self._current_interface.name if self._current_interface else "unknown"
+        self._current_interface = None
         self._set_state(ConnectionState.DISCONNECTED)
 
         log_audit_event(
             "connection_closed",
-            f"Disconnected from {port_device}",
+            f"Disconnected from {interface_name}",
         )
 
         logger.info("Disconnected")
 
-    def set_transport(self, transport: TransportProtocol) -> None:
-        """Set the transport implementation (for testing/simulation)."""
+    def set_transport(self, transport: Any) -> None:
+        """Set the transport implementation (for testing)."""
         self._transport = transport
 
-    def get_transport(self) -> TransportProtocol | None:
+    def get_transport(self) -> Any:
         """Get the current transport."""
         return self._transport
 
-    def _create_transport(self) -> TransportProtocol:
-        """Create the appropriate transport instance."""
-        if self._simulation_mode:
-            from e92_pulse.transport.mock_transport import MockTransport
+    def _create_transport(self) -> Any:
+        """Create the CAN transport instance."""
+        from e92_pulse.transport.can_transport import CANTransport
 
-            logger.info("Using simulation transport")
-            return MockTransport()
-        else:
-            from e92_pulse.transport.serial_link import SerialTransport
-
-            return SerialTransport()
+        logger.info("Using CAN transport (SocketCAN)")
+        return CANTransport()
 
     def _set_state(self, new_state: ConnectionState) -> None:
         """Update state and notify callbacks."""

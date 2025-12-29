@@ -1,6 +1,6 @@
 # E92 Pulse
 
-A production-grade diagnostic GUI tool for BMW E92 M3 using K+DCAN USB cable. Provides ISTA-style guided workflows for vehicle diagnostics on Linux.
+A production-grade diagnostic GUI tool for BMW E92 M3 using SocketCAN. Provides ISTA-style guided workflows for vehicle diagnostics on Linux.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.11+-green.svg)
@@ -13,7 +13,7 @@ A production-grade diagnostic GUI tool for BMW E92 M3 using K+DCAN USB cable. Pr
 - **Fault Memory Management**: Read, display, search, and clear DTCs
 - **Service Functions**: Battery registration, ECU reset
 - **Session Export**: Export diagnostic sessions as ZIP/JSON
-- **Simulation Mode**: Full functionality without hardware for testing
+- **Vehicle Info Display**: Shows VIN, series, and engine info when connected
 
 ## What This Tool Does NOT Do
 
@@ -30,17 +30,32 @@ These restrictions are enforced at multiple layers and cannot be circumvented. A
 
 ## Hardware Requirements
 
-- **K+DCAN USB Cable**: FTDI-based cables recommended for best compatibility
-  - FTDI FT232R/FT232H (preferred)
-  - CH340/CH341 (compatible)
-  - CP210x, PL2303 (compatible)
-- **Linux System**: Tested on Ubuntu 22.04+, Debian 12+
+### Required Hardware
+
+| Item | Description | Approx. Cost |
+|------|-------------|--------------|
+| **Innomaker USB2CAN** | USB to CAN adapter (SocketCAN compatible) | ~$33 |
+| **DB9 to OBD2 Cable** | Connects USB2CAN to vehicle's OBD2 port | ~$18 |
+
+**Total: ~$51**
+
+### Where to Buy
+
+Search Amazon for:
+- `Innomaker USB2CAN` - Get the basic USB2CAN version ($32.99)
+- `Innomaker DB9 to OBD2 cable` - The one that says "fits USB to CAN Module of Innomaker" ($17.99)
+
+### What NOT to Buy
+
+- **K+DCAN cables** - These don't work reliably on Linux (serial-based, not SocketCAN)
+- **ELM327 adapters** - Wrong protocol entirely
+- **USB to RS485 adapters** - Different protocol, won't work
+
+### System Requirements
+
+- **Linux**: Ubuntu 22.04+, Fedora 38+, Debian 12+, or any distro with SocketCAN support
 - **Python 3.11+**
-
-### Recommended Cables
-
-1. **FTDI-based K+DCAN cables** - Most reliable for BMW diagnostics
-2. Ensure your cable supports both K-line and D-CAN protocols
+- **Kernel**: Linux 3.2+ (for gs_usb driver support)
 
 ## Installation
 
@@ -48,77 +63,87 @@ These restrictions are enforced at multiple layers and cannot be circumvented. A
 
 ```bash
 # Clone the repository
-git clone https://github.com/example/e92-pulse.git
-cd e92-pulse
+git clone https://github.com/Reese-afk/E92-Pulse.git
+cd E92-Pulse
 
 # Create virtual environment
 python3.11 -m venv venv
 source venv/bin/activate
 
 # Install in development mode
-pip install -e ".[dev]"
+pip install -e .
 ```
 
 ### Dependencies
 
 Core dependencies are installed automatically:
 - PyQt6 (GUI framework)
-- pyserial (serial port access)
 - python-can (CAN bus support)
 - can-isotp (ISO-TP protocol)
-- udsoncan (UDS protocol)
 - pyyaml (configuration)
 - platformdirs (platform paths)
 
-## Linux Permissions
+## Hardware Setup
 
-### Add User to dialout Group
+### 1. Connect the Hardware
+
+```
+[Laptop] --USB--> [Innomaker USB2CAN] --DB9 Cable--> [OBD2 Port on BMW]
+```
+
+### 2. Verify the Adapter is Detected
+
+When you plug in the USB2CAN, it should be detected automatically:
 
 ```bash
-sudo usermod -aG dialout $USER
+# Check if the adapter is recognized
+dmesg | tail -10
+
+# You should see something like:
+# usb 1-1: new full-speed USB device
+# gs_usb 1-1:1.0: registered CAN device can0
 ```
 
-**Important**: Log out and back in for group changes to take effect.
-
-### Verify Permissions
+### 3. Bring Up the CAN Interface
 
 ```bash
-# Check group membership
-groups
+# Set up the CAN interface (500kbps for BMW)
+sudo ip link set can0 up type can bitrate 500000
 
-# Verify you can access the serial port
-ls -la /dev/ttyUSB*
+# Verify it's up
+ip link show can0
 ```
 
-### Optional: udev Rule
+### 4. (Optional) Auto-Setup on Boot
 
-For persistent permissions, create `/etc/udev/rules.d/99-kdcan.rules`:
+Create a systemd service or add to `/etc/network/interfaces`:
 
-```
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001", MODE="0666", GROUP="dialout"
-```
-
-Then reload udev:
 ```bash
-sudo udevadm control --reload-rules
-sudo udevadm trigger
+# /etc/network/interfaces.d/can0
+auto can0
+iface can0 can static
+    bitrate 500000
 ```
 
-See [docs/linux-permissions.md](docs/linux-permissions.md) for detailed setup instructions.
+Or create udev rule `/etc/udev/rules.d/99-can.rules`:
+
+```
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="can*", RUN+="/sbin/ip link set %k up type can bitrate 500000"
+```
 
 ## Usage
 
-### Run with GUI
+### Run the Application
 
 ```bash
-# Using module
+# Make sure you're in the project directory with venv activated
+source venv/bin/activate
+
+# Run using module
 python -m e92_pulse
 
-# Using console script
+# Or using console script (after pip install)
 e92-pulse
-
-# With simulation mode (no hardware needed)
-e92-pulse --simulation
 
 # With debug logging
 e92-pulse --debug
@@ -127,13 +152,12 @@ e92-pulse --debug
 ### Command Line Options
 
 ```
-usage: e92-pulse [-h] [--simulation] [--debug] [--log-dir LOG_DIR] [--config CONFIG] [--version]
+usage: e92-pulse [-h] [--debug] [--log-dir LOG_DIR] [--config CONFIG] [--version]
 
 E92 Pulse - BMW E92 M3 Diagnostic Tool
 
 options:
   -h, --help         show this help message and exit
-  --simulation, -s   Run in simulation mode (no hardware required)
   --debug, -d        Enable debug logging
   --log-dir LOG_DIR  Custom log directory (default: ./logs)
   --config CONFIG    Path to configuration file
@@ -142,13 +166,15 @@ options:
 
 ## Workflow Guide
 
-### 1. Connect
+### 1. Connect to Vehicle
 
-1. Plug in your K+DCAN USB cable
-2. Connect the OBD-II end to your vehicle
-3. Turn ignition ON (engine OFF)
-4. Launch E92 Pulse
-5. Select the detected port and click "Connect"
+1. Connect USB2CAN to laptop
+2. Connect DB9-to-OBD2 cable to USB2CAN and vehicle
+3. Turn ignition ON (engine OFF recommended)
+4. Set up CAN interface: `sudo ip link set can0 up type can bitrate 500000`
+5. Launch E92 Pulse: `python -m e92_pulse`
+6. The app will detect `can0` - click "Connect"
+7. Vehicle info (VIN, series, engine) will display in the sidebar
 
 ### 2. Quick Test (Module Scan)
 
@@ -189,16 +215,41 @@ options:
 3. Export as ZIP or JSON
 4. Share with technicians or for records
 
+## Troubleshooting
+
+### "No CAN interfaces detected"
+
+1. Check if adapter is plugged in: `lsusb | grep -i can`
+2. Check kernel messages: `dmesg | tail -20`
+3. Make sure interface is up: `ip link show can0`
+4. Bring it up if needed: `sudo ip link set can0 up type can bitrate 500000`
+
+### "Failed to open CAN interface"
+
+1. Check permissions - you may need sudo or udev rules
+2. Verify bitrate is correct (500000 for BMW)
+3. Check if another program is using the interface
+
+### "CAN bus validation failed"
+
+1. Check physical connection to vehicle
+2. Ensure ignition is ON
+3. Verify OBD2 cable is fully seated
+4. Try disconnecting and reconnecting
+
+### Interface shows but no communication
+
+1. Verify you have the correct cable (CAN, not K-line)
+2. Check that vehicle ignition is ON
+3. Some modules need engine running
+
 ## Configuration
 
 Configuration is stored in `~/.config/e92_pulse/config.yaml`:
 
 ```yaml
-simulation_mode: false
 datapacks_dir: ~/.config/e92_pulse/datapacks
 connection:
-  preferred_port: null
-  baud_rate: 115200
   timeout: 1.0
 ui:
   theme: dark
@@ -210,7 +261,7 @@ logging:
 
 ## Datapacks
 
-Additional module definitions can be loaded from user datapacks. See [docs/datapacks.md](docs/datapacks.md) for the schema.
+Additional module definitions can be loaded from user datapacks.
 
 Place datapack files in `~/.config/e92_pulse/datapacks/`.
 
@@ -250,16 +301,6 @@ All diagnostic actions are logged to `./logs/` in JSONL format for audit purpose
 {"timestamp": "2024-01-15T10:30:00", "level": "INFO", "action": "clear_dtc", "module_id": "DME", "success": true}
 ```
 
-## Roadmap
-
-- [ ] Live data monitoring (engine parameters, sensors)
-- [ ] Adaptation reset functions
-- [ ] Service interval reset
-- [ ] Enhanced DTC descriptions via datapacks
-- [ ] Plugin system for extended functionality
-- [ ] SocketCAN support for native CAN interfaces
-- [ ] Report generation (PDF)
-
 ## Safety and Security
 
 This tool is designed with safety as a priority:
@@ -272,7 +313,7 @@ This tool is designed with safety as a priority:
 
 ## Contributing
 
-Contributions are welcome! Please read the contributing guidelines and ensure:
+Contributions are welcome! Please ensure:
 
 1. All tests pass
 2. Code is formatted with black

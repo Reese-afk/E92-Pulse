@@ -113,6 +113,7 @@ class SafetyManager:
         "flash_write",
         "coding_write",
         "dump_eeprom",
+        "eeprom_dump",
         "eeprom_write",
         "cas_reset",
         "theft",

@@ -168,6 +168,13 @@ class UDSClient:
     def set_target(self, address: int) -> None:
         """Set target ECU address."""
         self._target_address = address
+        # Also update transport if it supports target addressing
+        if hasattr(self._transport, "set_target_address"):
+            self._transport.set_target_address(address)
+        # For mock transport with ECU manager
+        if hasattr(self._transport, "_connected_ecu") and self._transport._connected_ecu:
+            if hasattr(self._transport._connected_ecu, "set_target"):
+                self._transport._connected_ecu.set_target(address)
 
     def set_timeout(self, timeout: float) -> None:
         """Set response timeout."""
@@ -406,6 +413,31 @@ class UDSClient:
             data += did.to_bytes(2, "big")
 
         return self.send_request(UDSServiceID.READ_DATA_BY_ID, data)
+
+    def read_vin(self) -> str | None:
+        """
+        Read Vehicle Identification Number (VIN) from the ECU.
+
+        Returns:
+            VIN string if successful, None if failed
+        """
+        # Standard UDS DID for VIN is 0xF190
+        VIN_DID = 0xF190
+
+        try:
+            response = self.read_data_by_id(VIN_DID)
+            if response.is_positive and response.data:
+                # Skip the DID echo (2 bytes) and decode VIN
+                vin_data = response.data[2:] if len(response.data) > 2 else response.data
+                # VIN is typically ASCII, 17 characters
+                vin = vin_data.decode("ascii", errors="ignore").strip()
+                # Validate VIN length
+                if len(vin) >= 11:  # Minimum reasonable VIN length
+                    return vin
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to read VIN: {e}")
+            return None
 
     def write_data_by_id(self, data_id: int, data: bytes) -> UDSResponse:
         """

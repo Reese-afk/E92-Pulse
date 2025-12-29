@@ -253,7 +253,6 @@ class ExportPage(QWidget):
 <b>Session ID:</b> {get_session_id()}<br>
 <b>Started:</b> {self._profile.session_start.strftime('%Y-%m-%d %H:%M:%S')}<br>
 <b>Log Directory:</b> {get_log_dir()}<br>
-<b>Mode:</b> {'Simulation' if self._config.simulation_mode else 'Live'}<br>
 """
         self._session_info.setHtml(session_text)
 

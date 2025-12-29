@@ -308,13 +308,17 @@ class ServicesPage(QWidget):
         module_layout = QVBoxLayout(module_group)
 
         self._reset_module_combo = QComboBox()
-        self._reset_module_combo.addItem("DME - Digital Motor Electronics")
-        self._reset_module_combo.addItem("DSC - Dynamic Stability Control")
-        self._reset_module_combo.addItem("KOMBI - Instrument Cluster")
-        self._reset_module_combo.addItem("FRM - Footwell Module")
+        # Will be populated from scan results
         module_layout.addWidget(self._reset_module_combo)
 
+        self._refresh_modules_btn = QPushButton("Refresh Module List")
+        self._refresh_modules_btn.clicked.connect(self._refresh_module_list)
+        module_layout.addWidget(self._refresh_modules_btn)
+
         layout.addWidget(module_group)
+
+        # Initial population
+        self._refresh_module_list()
 
         # Reset type
         type_group = QGroupBox("Step 2: Reset Type")
@@ -369,6 +373,34 @@ class ServicesPage(QWidget):
         self._wizard_stack.setCurrentIndex(index)
         self._battery_btn.setChecked(index == 0)
         self._reset_btn.setChecked(index == 1)
+
+    def _refresh_module_list(self) -> None:
+        """Refresh the module list from scan results."""
+        self._reset_module_combo.clear()
+
+        # Get modules from vehicle profile
+        if self._profile and self._profile.modules:
+            for module_id, status in self._profile.modules.items():
+                if status.responding:
+                    self._reset_module_combo.addItem(
+                        f"{module_id} - {status.name}",
+                        module_id
+                    )
+
+        # If no modules from profile, add defaults
+        if self._reset_module_combo.count() == 0:
+            default_modules = [
+                ("DME", "Digital Motor Electronics"),
+                ("DSC", "Dynamic Stability Control"),
+                ("KOMBI", "Instrument Cluster"),
+                ("FRM", "Footwell Module"),
+                ("CAS", "Car Access System"),
+                ("EGS", "Electronic Transmission Control"),
+            ]
+            for module_id, name in default_modules:
+                self._reset_module_combo.addItem(f"{module_id} - {name}", module_id)
+
+        logger.info(f"Module list refreshed: {self._reset_module_combo.count()} modules")
 
     def _check_preconditions(self) -> None:
         """Check if all preconditions are met."""
@@ -458,8 +490,15 @@ class ServicesPage(QWidget):
             return
 
         # Get selected module
-        module_text = self._reset_module_combo.currentText()
-        module_id = module_text.split(" - ")[0]
+        module_id = self._reset_module_combo.currentData()
+        if not module_id:
+            # Fallback to parsing from text
+            module_text = self._reset_module_combo.currentText()
+            module_id = module_text.split(" - ")[0] if module_text else None
+
+        if not module_id:
+            QMessageBox.warning(self, "Error", "Please select a module")
+            return
 
         # Get reset type
         reset_type = 0x03 if self._soft_reset_radio.isChecked() else 0x02
